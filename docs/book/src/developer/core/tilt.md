@@ -671,6 +671,13 @@ insecure = true
 
 NB: on macOS this configuration should be done **in the podman machine** by running `podman machine ssh <machine>`.
 
+### ErrImagePull (images not found)
+
+If controller pods show **ErrImagePull**, the cluster is trying to pull images (e.g. `gcr.io/k8s-staging-cluster-api/...:dev`) that are not in a reachable registry. When a local registry is detected (ConfigMap `local-registry-hosting` in `kube-public`), Tilt sets **default_registry** to `localhost:5000` so it pushes there and the kind cluster can pull. If you still see ErrImagePull:
+
+1. Ensure your current context is the kind cluster: `kubectl config use-context kind-capi-test` (or your `kind_cluster_name`), then run `make tilt-up` again.
+2. If you use a different context when starting Tilt, set the registry explicitly in `tilt-settings.yaml`: `default_registry: localhost:5000`.
+
 ### Errors loading images in kind
 
 You may try manually to load images in kind by running:

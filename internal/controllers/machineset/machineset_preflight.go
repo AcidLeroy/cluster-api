@@ -114,7 +114,7 @@ func (r *Reconciler) runPreflightChecks(ctx context.Context, cluster *clusterv1.
 
 		// Run the kubeadm-version skew preflight check.
 		if shouldRun(r.PreflightChecks, skipped, clusterv1.MachineSetPreflightCheckKubeadmVersionSkew) {
-			if preflightCheckErr := r.kubeadmVersionPreflightCheck(cpSemver, msSemver, ms); preflightCheckErr != nil {
+			if preflightCheckErr := r.kubeadmVersionPreflightCheck(ctx, cluster, controlPlane, cpSemver, msSemver, ms); preflightCheckErr != nil {
 				preflightCheckErrs = append(preflightCheckErrs, preflightCheckErr)
 			}
 		}
@@ -203,7 +203,7 @@ func (r *Reconciler) kubernetesVersionPreflightCheck(cpSemver, msSemver semver.V
 	return nil
 }
 
-func (r *Reconciler) kubeadmVersionPreflightCheck(cpSemver, msSemver semver.Version, ms *clusterv1.MachineSet) preflightCheckErrorMessage {
+func (r *Reconciler) kubeadmVersionPreflightCheck(ctx context.Context, cluster *clusterv1.Cluster, controlPlane *unstructured.Unstructured, cpSemver, msSemver semver.Version, ms *clusterv1.MachineSet) preflightCheckErrorMessage {
 	// If the bootstrap.configRef is nil return early.
 	if !ms.Spec.Template.Spec.Bootstrap.ConfigRef.IsDefined() {
 		return nil
@@ -217,6 +217,17 @@ func (r *Reconciler) kubeadmVersionPreflightCheck(cpSemver, msSemver semver.Vers
 		bootstrapConfigRef.APIGroup == bootstrapv1.GroupVersion.Group
 	if kubeadmBootstrapProviderUsed {
 		if cpSemver.Minor != msSemver.Minor {
+			// For managed topology clusters: allow scale-up during upgrade when the control plane has already
+			// been upgraded to the cluster's target version. New machines created during this window will
+			// use the target version for join (see kubeadm bootstrap controller). This allows scaling up
+			// MachineDeployments while the control plane is at 1.35 and MD is still rolling out 1.34 -> 1.35.
+			if feature.Gates.Enabled(feature.ClusterTopology) && cluster.Spec.Topology.IsDefined() && cluster.Spec.Topology.Version != "" {
+				cpVersion, err := contract.ControlPlane().Version().Get(controlPlane)
+				if err == nil && cpVersion != nil && *cpVersion == cluster.Spec.Topology.Version {
+					// Control plane is at target version; new nodes can join with target version kubeadm.
+					return nil
+				}
+			}
 			return ptr.To(fmt.Sprintf("MachineSet version (%s) and ControlPlane version (%s) do not conform to kubeadm version skew policy as kubeadm only supports joining with the same major+minor version as the control plane (%q preflight check failed)", msSemver.String(), cpSemver.String(), clusterv1.MachineSetPreflightCheckKubeadmVersionSkew))
 		}
 	}
@@ -226,6 +237,11 @@ func (r *Reconciler) kubeadmVersionPreflightCheck(cpSemver, msSemver semver.Vers
 func (r *Reconciler) controlPlaneVersionPreflightCheck(cluster *clusterv1.Cluster, cpVersion, msVersion string) preflightCheckErrorMessage {
 	if feature.Gates.Enabled(feature.ClusterTopology) && cluster.Spec.Topology.IsDefined() {
 		if cpVersion != msVersion {
+			// Allow scale-up during upgrade when control plane is already at cluster target version
+			// (same exception as in kubeadmVersionPreflightCheck).
+			if cluster.Spec.Topology.Version != "" && cpVersion == cluster.Spec.Topology.Version {
+				return nil
+			}
 			return ptr.To(fmt.Sprintf("MachineSet version (%s) is not yet the same as the ControlPlane version (%s), waiting for version to be propagated to the MachineSet (%q preflight check failed)", msVersion, cpVersion, clusterv1.MachineSetPreflightCheckControlPlaneVersionSkew))
 		}
 	}
