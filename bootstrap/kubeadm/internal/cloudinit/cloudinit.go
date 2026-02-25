@@ -34,7 +34,9 @@ const (
 	sentinelFileCommand = "echo success > /run/cluster-api/bootstrap-success.complete"
 	// FetchKubeadmScriptCommandConst runs /tmp/fetch-kubeadm.sh if present (e.g. on custom node images). No-op if missing.
 	// Exported for use by Ignition path which does not call prepare().
-	FetchKubeadmScriptCommandConst = "[ -x /tmp/fetch-kubeadm.sh ] && /tmp/fetch-kubeadm.sh || true"
+	// EXPERIMENTAL: Original line below; restore after experimental phase so we can see script output under CAPD (docker exec <container> cat /var/log/fetch-kubeadm.log).
+	// FetchKubeadmScriptCommandConst = "[ -x /tmp/fetch-kubeadm.sh ] && /tmp/fetch-kubeadm.sh || true"
+	FetchKubeadmScriptCommandConst = "[ -x /tmp/fetch-kubeadm.sh ] && /tmp/fetch-kubeadm.sh 2>&1 | tee /var/log/fetch-kubeadm.log || true"
 	fetchKubeadmScriptCommand      = FetchKubeadmScriptCommandConst
 	cloudConfigHeader         = `## template: jinja
 #cloud-config
