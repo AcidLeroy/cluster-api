@@ -51,9 +51,7 @@ import (
 	"sigs.k8s.io/cluster-api/bootstrap/kubeadm/types/upstream"
 	bsutil "sigs.k8s.io/cluster-api/bootstrap/util"
 	"sigs.k8s.io/cluster-api/controllers/clustercache"
-	"sigs.k8s.io/cluster-api/controllers/external"
 	"sigs.k8s.io/cluster-api/feature"
-	"sigs.k8s.io/cluster-api/internal/contract"
 	"sigs.k8s.io/cluster-api/internal/util/taints"
 	"sigs.k8s.io/cluster-api/util"
 	"sigs.k8s.io/cluster-api/util/conditions"
@@ -688,8 +686,7 @@ func (r *KubeadmConfigReconciler) joinWorker(ctx context.Context, scope *Scope) 
 		return res, nil
 	}
 
-	// Use cluster target version for join when scaling during upgrade (see kubernetesVersionForJoin).
-	kubernetesVersion := r.kubernetesVersionForJoin(ctx, scope)
+	kubernetesVersion := scope.ConfigOwner.KubernetesVersion()
 	parsedVersion, err := semver.ParseTolerant(kubernetesVersion)
 	if err != nil {
 		return ctrl.Result{}, errors.Wrapf(err, "failed to parse kubernetes version %q", kubernetesVersion)
@@ -864,8 +861,7 @@ func (r *KubeadmConfigReconciler) joinControlplane(ctx context.Context, scope *S
 		return res, nil
 	}
 
-	// Use cluster target version for join when adding a control plane node during upgrade (see kubernetesVersionForJoin).
-	kubernetesVersion := r.kubernetesVersionForJoin(ctx, scope)
+	kubernetesVersion := scope.ConfigOwner.KubernetesVersion()
 	parsedVersion, err := semver.ParseTolerant(kubernetesVersion)
 	if err != nil {
 		return ctrl.Result{}, errors.Wrapf(err, "failed to parse kubernetes version %q", kubernetesVersion)
@@ -1301,45 +1297,6 @@ func (r *KubeadmConfigReconciler) reconcileDiscoveryFile(ctx context.Context, cl
 	}
 
 	return ctrl.Result{}, nil
-}
-
-// kubernetesVersionForJoin returns the Kubernetes version to use when generating join configuration.
-// For managed topology clusters, when the control plane has already been upgraded to the cluster's
-// target version but the joining machine (from a MachineDeployment template) still has the old
-// version, we use the cluster's target version so the node joins with the correct kubeadm (scale-up during upgrade).
-func (r *KubeadmConfigReconciler) kubernetesVersionForJoin(ctx context.Context, scope *Scope) string {
-	machineVersion := scope.ConfigOwner.KubernetesVersion()
-	if machineVersion == "" {
-		return machineVersion
-	}
-	if !feature.Gates.Enabled(feature.ClusterTopology) || !scope.Cluster.Spec.Topology.IsDefined() || scope.Cluster.Spec.Topology.Version == "" {
-		return machineVersion
-	}
-	if scope.Cluster.Spec.Topology.Version == machineVersion {
-		return machineVersion
-	}
-	if !scope.Cluster.Spec.ControlPlaneRef.IsDefined() {
-		return machineVersion
-	}
-	controlPlane, err := external.GetObjectFromContractVersionedRef(ctx, r.Client, scope.Cluster.Spec.ControlPlaneRef, scope.Cluster.Namespace)
-	if err != nil {
-		return machineVersion
-	}
-	cpVersionPtr, err := contract.ControlPlane().Version().Get(controlPlane)
-	if err != nil || cpVersionPtr == nil || *cpVersionPtr == "" {
-		return machineVersion
-	}
-	// Compare using parsed semver so "v1.35.0" and "1.35.0" are treated as equal (some controllers store one or the other).
-	cpParsed, err := semver.ParseTolerant(*cpVersionPtr)
-	if err != nil {
-		return machineVersion
-	}
-	targetParsed, err := semver.ParseTolerant(scope.Cluster.Spec.Topology.Version)
-	if err != nil || cpParsed.Compare(targetParsed) != 0 {
-		return machineVersion
-	}
-	// Control plane is at cluster target version; use target version for join so new nodes get correct kubeadm.
-	return scope.Cluster.Spec.Topology.Version
 }
 
 // computeClusterConfigurationAndAdditionalData computes additional data that must go in kubeadm's ClusterConfiguration, but exists

@@ -723,22 +723,10 @@ func (r *Reconciler) updateMachineDeployment(ctx context.Context, s *scope.Scope
 		return nil
 	}
 
-	// When the MachineDeployment is pending an upgrade, skip template and version reconciliation to avoid a double
-	// rollout, but still allow replicas and remediation: sync only spec.replicas from topology so that scaling works
-	// during upgrade
+	// Return early if the MachineDeployment is pending an upgrade.
+	// Do not reconcile the MachineDeployment yet to avoid updating the MachineDeployment while it is still pending a
+	// version upgrade. This will prevent the MachineDeployment from performing a double rollout.
 	if s.UpgradeTracker.MachineDeployments.IsPendingUpgrade(currentMD.Object.Name) {
-		replicasOnlyDesired := currentMD.Object.DeepCopy()
-		replicasOnlyDesired.Spec.Replicas = desiredMD.Object.Spec.Replicas
-		patchHelper, err := structuredmerge.NewServerSidePatchHelper(ctx, currentMD.Object, replicasOnlyDesired, r.Client, r.ssaCache)
-		if err != nil {
-			return errors.Wrapf(err, "failed to create patch helper for MachineDeployment %s (pending upgrade)", klog.KObj(currentMD.Object))
-		}
-		if patchHelper.HasChanges() {
-			if _, err := patchHelper.Patch(ctx); err != nil {
-				return errors.Wrapf(err, "failed to patch MachineDeployment %s replicas (pending upgrade)", klog.KObj(currentMD.Object))
-			}
-			log.V(3).Info("Updated MachineDeployment replicas while pending upgrade", "replicas", desiredMD.Object.Spec.Replicas)
-		}
 		return nil
 	}
 

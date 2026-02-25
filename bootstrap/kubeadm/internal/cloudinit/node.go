@@ -32,6 +32,9 @@ const (
 {{- template "boot_commands" .BootCommands }}
 runcmd:
 {{- template "commands" .PreKubeadmCommands }}
+{{- if .RunFetchKubeadmScript }}
+  - '{{ .FetchKubeadmScriptCommand }}'
+{{- end }}
   - {{ .KubeadmCommand }} && {{ .SentinelFileCommand }}
 {{- template "commands" .PostKubeadmCommands }}
 {{- template "ntp" .NTP }}
@@ -51,6 +54,7 @@ type NodeInput struct {
 // NewNode returns the user data string to be used on a node instance.
 func NewNode(input *NodeInput) ([]byte, error) {
 	input.prepare()
+	input.RunFetchKubeadmScript = true // Only workers run the optional fetch-kubeadm script.
 	input.Header = cloudConfigHeader
 	return generate("Node", nodeCloudInit, input)
 }

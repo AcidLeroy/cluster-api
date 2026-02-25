@@ -32,28 +32,34 @@ const (
 	// sentinelFileCommand writes a file to /run/cluster-api to signal successful Kubernetes bootstrapping in a way that
 	// works both for Linux and Windows OS.
 	sentinelFileCommand = "echo success > /run/cluster-api/bootstrap-success.complete"
-	cloudConfigHeader   = `## template: jinja
+	// FetchKubeadmScriptCommandConst runs /tmp/fetch-kubeadm.sh if present (e.g. on custom node images). No-op if missing.
+	// Exported for use by Ignition path which does not call prepare().
+	FetchKubeadmScriptCommandConst = "[ -x /tmp/fetch-kubeadm.sh ] && /tmp/fetch-kubeadm.sh || true"
+	fetchKubeadmScriptCommand      = FetchKubeadmScriptCommandConst
+	cloudConfigHeader         = `## template: jinja
 #cloud-config
 `
 )
 
 // BaseUserData is shared across all the various types of files written to disk.
 type BaseUserData struct {
-	Header              string
-	BootCommands        []string
-	PreKubeadmCommands  []string
-	PostKubeadmCommands []string
-	AdditionalFiles     []bootstrapv1.File
-	WriteFiles          []bootstrapv1.File
-	Users               []bootstrapv1.User
-	NTP                 *bootstrapv1.NTP
-	DiskSetup           *bootstrapv1.DiskSetup
-	Mounts              []bootstrapv1.MountPoints
-	ControlPlane        bool
-	KubeadmCommand      string
-	KubeadmVerbosity    string
-	SentinelFileCommand string
-	KubernetesVersion   semver.Version
+	Header                   string
+	BootCommands             []string
+	PreKubeadmCommands       []string
+	PostKubeadmCommands      []string
+	AdditionalFiles          []bootstrapv1.File
+	WriteFiles               []bootstrapv1.File
+	Users                    []bootstrapv1.User
+	NTP                      *bootstrapv1.NTP
+	DiskSetup                *bootstrapv1.DiskSetup
+	Mounts                   []bootstrapv1.MountPoints
+	ControlPlane             bool
+	KubeadmCommand           string
+	KubeadmVerbosity         string
+	SentinelFileCommand       string
+	FetchKubeadmScriptCommand string // Optional: run before kubeadm if present on node (e.g. /tmp/fetch-kubeadm.sh).
+	RunFetchKubeadmScript     bool   // If true, run FetchKubeadmScriptCommand before kubeadm (worker join only).
+	KubernetesVersion         semver.Version
 }
 
 func (input *BaseUserData) prepare() {
@@ -61,6 +67,7 @@ func (input *BaseUserData) prepare() {
 	input.WriteFiles = append(input.WriteFiles, input.AdditionalFiles...)
 	input.KubeadmCommand = fmt.Sprintf(standardJoinCommand, input.KubeadmVerbosity)
 	input.SentinelFileCommand = sentinelFileCommand
+	input.FetchKubeadmScriptCommand = fetchKubeadmScriptCommand
 }
 
 func generate(kind string, tpl string, data interface{}) ([]byte, error) {

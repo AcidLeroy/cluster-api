@@ -169,7 +169,7 @@ spec:
           template: |
             imageTag: {{ .coreDNSImageTag }}
   - name: customImage
-    description: "Sets the container image that is used for running dockerMachines for the controlPlane and default-worker machineDeployments."
+    description: "Sets the container image that is used for running dockerMachines for the controlPlane and default-worker machineDeployments. Uses localhost:5001/node when running under Tilt (see tilt-settings.yaml default_registry)."
     definitions:
     - selector:
         apiVersion: infrastructure.cluster.x-k8s.io/v1beta2
@@ -183,7 +183,7 @@ spec:
         path: "/spec/template/spec/customImage"
         valueFrom:
           template: |
-            kindest/node:{{ .builtin.machineDeployment.version | replace "+" "_" }}
+            localhost:5001/node:{{ .builtin.machineDeployment.version | replace "+" "_" }}
     - selector:
         apiVersion: infrastructure.cluster.x-k8s.io/v1beta2
         kind: DockerMachinePoolTemplate
@@ -196,7 +196,7 @@ spec:
         path: "/spec/template/spec/template/customImage"
         valueFrom:
           template: |
-            kindest/node:{{ .builtin.machinePool.version | replace "+" "_" }}
+            localhost:5001/node:{{ .builtin.machinePool.version | replace "+" "_" }}
     - selector:
         apiVersion: infrastructure.cluster.x-k8s.io/v1beta2
         kind: DockerMachineTemplate
@@ -207,7 +207,7 @@ spec:
         path: "/spec/template/spec/customImage"
         valueFrom:
           template: |
-            kindest/node:{{ .builtin.controlPlane.version | replace "+" "_" }}
+            localhost:5001/node:{{ .builtin.controlPlane.version | replace "+" "_" }}
   - name: podSecurityStandard
     description: "Adds an admission configuration for PodSecurity to the kube-apiserver."
     definitions:

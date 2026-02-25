@@ -1,0 +1,10 @@
+# Experimental: kindest/node v1.34.0 with /tmp/kubeadm-version and fetch script.
+# For testing only. Not part of main CAPD/kind image flow.
+FROM kindest/node:v1.34.0
+
+# Version file used by fetch-kubeadm.sh
+RUN echo "1.34.0" > /tmp/control-plane-kubeadm-version
+
+# Script that reads /tmp/kubeadm-version and prints it
+COPY fetch-kubeadm.sh /tmp/fetch-kubeadm.sh
+RUN chmod +x /tmp/fetch-kubeadm.sh

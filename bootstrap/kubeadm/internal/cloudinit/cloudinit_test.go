@@ -319,6 +319,7 @@ func TestNewJoinNodeCommands(t *testing.T) {
 
 	expectedRunCmd := `runcmd:
   - "\"echo $(date) ': hello PreKubeadmCommands!'\""
+  - '[ -x /tmp/fetch-kubeadm.sh ] && /tmp/fetch-kubeadm.sh || true'
   - kubeadm join --config /run/kubeadm/kubeadm-join-config.yaml  && echo success > /run/cluster-api/bootstrap-success.complete
   - "echo $(date) ': hello PostKubeadmCommands!'"`
 
