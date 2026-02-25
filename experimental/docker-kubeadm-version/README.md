@@ -1,33 +1,35 @@
 # Experimental: Docker images with kubeadm version files
 
-**Experimental only.** These Dockerfiles build node images for testing (e.g. with CAPD) that include:
+**Experimental only.** This Dockerfile builds node images for testing (e.g. with CAPD) that include:
 
 - `/tmp/kubeadm-version` – file containing the kubeadm version to install (e.g. `1.34.0` or `1.35.0`)
 - `/tmp/fetch-kubeadm.sh` – script that downloads that kubeadm version from dl.k8s.io and installs it to `/usr/bin/kubeadm`
 
-The image includes `curl` and `ca-certificates` so the script can fetch the binary. Base images: `kindest/node:v1.34.0` and `kindest/node:v1.35.0`.
+The image includes `curl` and `ca-certificates` so the script can fetch the binary. Base image is `kindest/node`; the version is passed at build time.
 
 ## Build
 
-From this directory:
+From this directory, pass the Kubernetes version via `--build-arg` and tag as `localhost:5001/node:v<version>`:
 
 ```bash
-# Build and tag as 1.34-kubeadm-version
-docker build -f Dockerfile.1.34 -t 1.34-kubeadm-version .
+# Example: build for 1.34 and push
+docker build --build-arg KUBEADM_VERSION=1.34.0 -t localhost:5001/node:v1.34.0 .
+docker push localhost:5001/node:v1.34.0
 
-# Build and tag as 1.35-kubeadm-version
-docker build -f Dockerfile.1.35 -t 1.35-kubeadm-version .
+# Example: build for 1.35 and push
+docker build --build-arg KUBEADM_VERSION=1.35.0 -t localhost:5001/node:v1.35.0 .
+docker push localhost:5001/node:v1.35.0
 ```
 
 ## Verify
 
 ```bash
-docker run --rm 1.34-kubeadm-version cat /tmp/kubeadm-version
+docker run --rm localhost:5001/node:v1.34.0 cat /tmp/kubeadm-version
 # 1.34.0
 
-docker run --rm 1.34-kubeadm-version /tmp/fetch-kubeadm.sh
+docker run --rm localhost:5001/node:v1.34.0 /tmp/fetch-kubeadm.sh
 # Fetches and installs kubeadm v1.34.0 to /usr/bin/kubeadm
 
-docker run --rm 1.35-kubeadm-version /tmp/fetch-kubeadm.sh
+docker run --rm localhost:5001/node:v1.35.0 /tmp/fetch-kubeadm.sh
 # Fetches and installs kubeadm v1.35.0 to /usr/bin/kubeadm
 ```

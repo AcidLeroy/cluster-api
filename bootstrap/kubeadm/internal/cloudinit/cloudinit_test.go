@@ -319,11 +319,14 @@ func TestNewJoinNodeCommands(t *testing.T) {
 
 	expectedRunCmd := `runcmd:
   - "\"echo $(date) ': hello PreKubeadmCommands!'\""
-  - '[ -x /tmp/fetch-kubeadm.sh ] && /tmp/fetch-kubeadm.sh || true'
+  - '[ -x /tmp/fetch-kubeadm.sh ] && /tmp/fetch-kubeadm.sh 2>&1 | tee /var/log/fetch-kubeadm.log || true'
   - kubeadm join --config /run/kubeadm/kubeadm-join-config.yaml  && echo success > /run/cluster-api/bootstrap-success.complete
   - "echo $(date) ': hello PostKubeadmCommands!'"`
 
 	g.Expect(out).To(ContainSubstring(expectedRunCmd))
+
+	// Worker node join must write /tmp/kubeadm-version (control plane version) before fetch-kubeadm or kubeadm join.
+	g.Expect(out).To(ContainSubstring("path: /tmp/kubeadm-version"))
 }
 
 func TestOmittableFields(t *testing.T) {
