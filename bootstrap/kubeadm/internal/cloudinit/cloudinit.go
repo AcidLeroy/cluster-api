@@ -32,12 +32,6 @@ const (
 	// sentinelFileCommand writes a file to /run/cluster-api to signal successful Kubernetes bootstrapping in a way that
 	// works both for Linux and Windows OS.
 	sentinelFileCommand = "echo success > /run/cluster-api/bootstrap-success.complete"
-	// FetchKubeadmScriptCommandConst runs /tmp/fetch-kubeadm.sh if present (e.g. on custom node images). No-op if missing.
-	// Exported for use by Ignition path which does not call prepare().
-	// EXPERIMENTAL: Original line below; restore after experimental phase so we can see script output under CAPD (docker exec <container> cat /var/log/fetch-kubeadm.log).
-	// FetchKubeadmScriptCommandConst = "[ -x /tmp/fetch-kubeadm.sh ] && /tmp/fetch-kubeadm.sh || true"
-	FetchKubeadmScriptCommandConst = "[ -x /tmp/fetch-kubeadm.sh ] && /tmp/fetch-kubeadm.sh 2>&1 | tee /var/log/fetch-kubeadm.log || true"
-	fetchKubeadmScriptCommand      = FetchKubeadmScriptCommandConst
 	cloudConfigHeader         = `## template: jinja
 #cloud-config
 `
@@ -58,10 +52,8 @@ type BaseUserData struct {
 	ControlPlane             bool
 	KubeadmCommand           string
 	KubeadmVerbosity         string
-	SentinelFileCommand       string
-	FetchKubeadmScriptCommand string // Optional: run before kubeadm if present on node (e.g. /tmp/fetch-kubeadm.sh).
-	RunFetchKubeadmScript     bool   // If true, run FetchKubeadmScriptCommand before kubeadm (worker join only).
-	KubernetesVersion         semver.Version
+	SentinelFileCommand      string
+	KubernetesVersion        semver.Version
 }
 
 func (input *BaseUserData) prepare() {
@@ -69,7 +61,6 @@ func (input *BaseUserData) prepare() {
 	input.WriteFiles = append(input.WriteFiles, input.AdditionalFiles...)
 	input.KubeadmCommand = fmt.Sprintf(standardJoinCommand, input.KubeadmVerbosity)
 	input.SentinelFileCommand = sentinelFileCommand
-	input.FetchKubeadmScriptCommand = fetchKubeadmScriptCommand
 }
 
 func generate(kind string, tpl string, data interface{}) ([]byte, error) {

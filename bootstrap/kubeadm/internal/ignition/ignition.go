@@ -73,8 +73,6 @@ func NewNode(input *NodeInput) ([]byte, string, error) {
 	input.WriteFiles = append([]bootstrapv1.File{versionFile}, input.WriteFiles...)
 	input.WriteFiles = append(input.WriteFiles, input.AdditionalFiles...)
 	input.KubeadmCommand = fmt.Sprintf(kubeadmCommandTemplate, joinSubcommand, input.KubeadmVerbosity)
-	input.FetchKubeadmScriptCommand = cloudinit.FetchKubeadmScriptCommandConst
-	input.RunFetchKubeadmScript = true // Only workers run the optional fetch-kubeadm script.
 
 	return render(&input.BaseUserData, input.Ignition, input.JoinConfiguration)
 }

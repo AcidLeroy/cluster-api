@@ -46,11 +46,11 @@ func TestNewNode(t *testing.T) {
 					},
 				},
 			},
-			checkWriteFiles("/tmp/kubeadm-version", "/etc/foo.conf", "/run/kubeadm/kubeadm-join-config.yaml", "/run/cluster-api/placeholder"),
+			checkWriteFiles(KubeadmVersionPath, "/etc/foo.conf", "/run/kubeadm/kubeadm-join-config.yaml", "/run/cluster-api/placeholder"),
 			false,
 		},
 		{
-			"check for existence of /tmp/kubeadm-version, /run/kubeadm/kubeadm-join-config.yaml and /run/cluster-api/placeholder",
+			"check for existence of kubeadm-version path, /run/kubeadm/kubeadm-join-config.yaml and /run/cluster-api/placeholder",
 			&NodeInput{},
 			checkWriteFiles(KubeadmVersionPath, "/run/kubeadm/kubeadm-join-config.yaml", "/run/cluster-api/placeholder"),
 			false,

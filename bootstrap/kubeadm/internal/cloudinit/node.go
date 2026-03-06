@@ -23,8 +23,7 @@ import (
 const (
 	// KubeadmVersionPath is the path where the control plane Kubernetes version is written for worker nodes.
 	// It must exist before kubeadm join runs.
-	// TODO(Cody): rename this probably
-	KubeadmVersionPath = "/tmp/kubeadm-version"
+	KubeadmVersionPath = "/var/lib/kubeadm-version/version"
 )
 
 const (
@@ -43,9 +42,6 @@ const (
 {{- template "boot_commands" .BootCommands }}
 runcmd:
 {{- template "commands" .PreKubeadmCommands }}
-{{- if .RunFetchKubeadmScript }}
-  - '{{ .FetchKubeadmScriptCommand }}'
-{{- end }}
   - {{ .KubeadmCommand }} && {{ .SentinelFileCommand }}
 {{- template "commands" .PostKubeadmCommands }}
 {{- template "ntp" .NTP }}
@@ -65,7 +61,6 @@ type NodeInput struct {
 // NewNode returns the user data string to be used on a node instance.
 func NewNode(input *NodeInput) ([]byte, error) {
 	input.prepare()
-	input.RunFetchKubeadmScript = true // Only workers run the optional fetch-kubeadm script.
 	input.Header = cloudConfigHeader
 	// Write control plane version to KubeadmVersionPath so it exists before kubeadm join.
 	versionFile := bootstrapv1.File{

@@ -216,10 +216,6 @@ storage:
           {{ range .PreKubeadmCommands }}
           {{ . | Indent 10 }}
           {{- end }}
-
-          {{- if .RunFetchKubeadmScript }}
-          {{ .FetchKubeadmScriptCommand | Indent 10 }}
-          {{- end }}
           {{ .KubeadmCommand }}
           mkdir -p /run/cluster-api && echo success > /run/cluster-api/bootstrap-success.complete
           mv /etc/kubeadm.yml /tmp/
