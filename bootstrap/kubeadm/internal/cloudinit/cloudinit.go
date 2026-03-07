@@ -32,28 +32,28 @@ const (
 	// sentinelFileCommand writes a file to /run/cluster-api to signal successful Kubernetes bootstrapping in a way that
 	// works both for Linux and Windows OS.
 	sentinelFileCommand = "echo success > /run/cluster-api/bootstrap-success.complete"
-	cloudConfigHeader         = `## template: jinja
+	cloudConfigHeader   = `## template: jinja
 #cloud-config
 `
 )
 
 // BaseUserData is shared across all the various types of files written to disk.
 type BaseUserData struct {
-	Header                   string
-	BootCommands             []string
-	PreKubeadmCommands       []string
-	PostKubeadmCommands      []string
-	AdditionalFiles          []bootstrapv1.File
-	WriteFiles               []bootstrapv1.File
-	Users                    []bootstrapv1.User
-	NTP                      *bootstrapv1.NTP
-	DiskSetup                *bootstrapv1.DiskSetup
-	Mounts                   []bootstrapv1.MountPoints
-	ControlPlane             bool
-	KubeadmCommand           string
-	KubeadmVerbosity         string
-	SentinelFileCommand      string
-	KubernetesVersion        semver.Version
+	Header              string
+	BootCommands        []string
+	PreKubeadmCommands  []string
+	PostKubeadmCommands []string
+	AdditionalFiles     []bootstrapv1.File
+	WriteFiles          []bootstrapv1.File
+	Users               []bootstrapv1.User
+	NTP                 *bootstrapv1.NTP
+	DiskSetup           *bootstrapv1.DiskSetup
+	Mounts              []bootstrapv1.MountPoints
+	ControlPlane        bool
+	KubeadmCommand      string
+	KubeadmVerbosity    string
+	SentinelFileCommand string
+	KubernetesVersion   semver.Version
 }
 
 func (input *BaseUserData) prepare() {

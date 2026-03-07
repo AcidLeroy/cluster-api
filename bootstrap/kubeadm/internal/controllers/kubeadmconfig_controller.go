@@ -820,7 +820,7 @@ func (r *KubeadmConfigReconciler) joinWorker(ctx context.Context, scope *Scope) 
 // getControlPlaneVersionForJoin returns the control plane (cluster) version from the cluster's ControlPlaneRef,
 // e.g. KubeadmControlPlane.spec.version. Returns empty string if the cluster has no ControlPlaneRef or the version
 // cannot be read (e.g. control plane not found or does not support version). Used for worker join so that
-// a 1.34 node uses kubeadm 1.35 when the control plane is at 1.35, for example
+// a 1.34 node uses kubeadm 1.35 when the control plane is at 1.35, for example.
 func (r *KubeadmConfigReconciler) getControlPlaneVersionForJoin(ctx context.Context, scope *Scope) string {
 	if !scope.Cluster.Spec.ControlPlaneRef.IsDefined() {
 		return ""
