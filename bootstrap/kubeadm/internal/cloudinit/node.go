@@ -23,7 +23,7 @@ import (
 const (
 	// KubeadmVersionPath is the path where the control plane Kubernetes version is written for worker nodes.
 	// It must exist before kubeadm join runs.
-	KubeadmVersionPath = "/var/lib/kubeadm-version/version"
+	KubeadmVersionPath = "/run/cluster-api/kubeadm-version/version"
 )
 
 const (

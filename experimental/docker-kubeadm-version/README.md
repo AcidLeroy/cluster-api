@@ -2,7 +2,7 @@
 
 **Experimental only.** This Dockerfile builds node images for testing (e.g. with CAPD). The image does **not**
 bake in `fetch-kubeadm.sh`; instead, the CAPD quick-start `KubeadmConfigTemplate` injects
-`/var/lib/kubeadm-version/fetch-kubeadm.sh` via `files`, and runs setup via `preKubeadmCommands` before `kubeadm join`.
+`/run/cluster-api/kubeadm-version/fetch-kubeadm.sh` via `files`, and runs setup via `preKubeadmCommands` before `kubeadm join`.
 
 The image only ensures `curl` and `ca-certificates` are available. Base image is `kindest/node`; the version is
 passed at build time.

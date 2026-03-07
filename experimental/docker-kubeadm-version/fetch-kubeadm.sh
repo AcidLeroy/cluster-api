@@ -1,10 +1,10 @@
 #!/bin/sh
-# Reads kubeadm version from /var/lib/kubeadm-version/version, downloads that kubeadm binary from
+# Reads kubeadm version from /run/cluster-api/kubeadm-version/version, downloads that kubeadm binary from
 # dl.k8s.io, and installs it to /usr/bin/kubeadm. Used for experimental testing with
 # custom node images (e.g. workers joining with a different kubeadm version).
 set -e
 
-VERSION_FILE="/var/lib/kubeadm-version/version"
+VERSION_FILE="/run/cluster-api/kubeadm-version/version"
 KUBEADM_INSTALL="/usr/bin/kubeadm"
 BASE_URL="https://dl.k8s.io/release"
 

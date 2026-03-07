@@ -343,13 +343,13 @@ spec:
   template:
     spec:
       files:
-      - path: /var/lib/kubeadm-version/fetch-kubeadm.sh
+      - path: /run/cluster-api/kubeadm-version/fetch-kubeadm.sh
         owner: "root:root"
         permissions: "0755"
         content: |
           #!/bin/sh
           set -e
-          VERSION_FILE="/var/lib/kubeadm-version/version"
+          VERSION_FILE="/run/cluster-api/kubeadm-version/version"
           KUBEADM_INSTALL="/usr/bin/kubeadm"
           BASE_URL="https://dl.k8s.io/release"
           if [ ! -f "$VERSION_FILE" ]; then
@@ -380,7 +380,7 @@ spec:
       preKubeadmCommands:
       - |
         command -v curl >/dev/null 2>&1 || (apt-get update && apt-get install -y --no-install-recommends curl ca-certificates && rm -rf /var/lib/apt/lists/*)
-      - '[ -x /var/lib/kubeadm-version/fetch-kubeadm.sh ] && /var/lib/kubeadm-version/fetch-kubeadm.sh 2>&1 | tee /var/log/fetch-kubeadm.log || true'
+      - '[ -x /run/cluster-api/kubeadm-version/fetch-kubeadm.sh ] && /run/cluster-api/kubeadm-version/fetch-kubeadm.sh 2>&1 | tee /var/log/fetch-kubeadm.log || true'
       joinConfiguration:
         nodeRegistration: # node registration parameters are automatically injected by CAPD according to the kindest/node image in use.
           kubeletExtraArgs: # having a not empty kubeletExtraArgs is required for the externalCloudProvider to work
