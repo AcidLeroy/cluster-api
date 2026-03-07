@@ -28,6 +28,9 @@ fi
 
 KIND_CLUSTER_NAME=${CAPI_KIND_CLUSTER_NAME:-"capi-test"}
 KIND_CLUSTER_IMAGE=${CAPI_KIND_CLUSTER_IMAGE:-""}
+# Host port for the local registry (used in ConfigMap and node containerd config).
+# Tilt reads the cluster's local-registry-hosting ConfigMap and uses this host; set to match your registry.
+reg_port=${KIND_REGISTRY_PORT:-5000}
 
 # 1. If kind cluster already exists exit.
 if [[ "$(kind get clusters)" =~ .*"${KIND_CLUSTER_NAME}".* ]]; then
@@ -37,7 +40,6 @@ fi
 
 # 2. Create registry container unless it already exists
 reg_name='kind-registry'
-reg_port='5000'
 if [ "$(docker inspect -f '{{.State.Running}}' "${reg_name}" 2>/dev/null || true)" != 'true' ]; then
   docker run \
     -d --restart=always -p "127.0.0.1:${reg_port}:5000" --name "${reg_name}" \

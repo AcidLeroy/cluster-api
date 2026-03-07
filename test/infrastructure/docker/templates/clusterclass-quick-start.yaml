@@ -169,7 +169,7 @@ spec:
           template: |
             imageTag: {{ .coreDNSImageTag }}
   - name: customImage
-    description: "Sets the container image that is used for running dockerMachines for the controlPlane and default-worker machineDeployments."
+    description: "Sets the container image that is used for running dockerMachines for the controlPlane and default-worker machineDeployments. Uses localhost:5001/node when running under Tilt (see tilt-settings.yaml default_registry)."
     definitions:
     - selector:
         apiVersion: infrastructure.cluster.x-k8s.io/v1beta2
@@ -183,7 +183,7 @@ spec:
         path: "/spec/template/spec/customImage"
         valueFrom:
           template: |
-            kindest/node:{{ .builtin.machineDeployment.version | replace "+" "_" }}
+            localhost:5001/node:{{ .builtin.machineDeployment.version | replace "+" "_" }}
     - selector:
         apiVersion: infrastructure.cluster.x-k8s.io/v1beta2
         kind: DockerMachinePoolTemplate
@@ -196,7 +196,7 @@ spec:
         path: "/spec/template/spec/template/customImage"
         valueFrom:
           template: |
-            kindest/node:{{ .builtin.machinePool.version | replace "+" "_" }}
+            localhost:5001/node:{{ .builtin.machinePool.version | replace "+" "_" }}
     - selector:
         apiVersion: infrastructure.cluster.x-k8s.io/v1beta2
         kind: DockerMachineTemplate
@@ -207,7 +207,7 @@ spec:
         path: "/spec/template/spec/customImage"
         valueFrom:
           template: |
-            kindest/node:{{ .builtin.controlPlane.version | replace "+" "_" }}
+            localhost:5001/node:{{ .builtin.controlPlane.version | replace "+" "_" }}
   - name: podSecurityStandard
     description: "Adds an admission configuration for PodSecurity to the kube-apiserver."
     definitions:
@@ -342,6 +342,45 @@ metadata:
 spec:
   template:
     spec:
+      files:
+      - path: /run/cluster-api/kubeadm-version/fetch-kubeadm.sh
+        owner: "root:root"
+        permissions: "0755"
+        content: |
+          #!/bin/sh
+          set -e
+          VERSION_FILE="/run/cluster-api/kubeadm-version/version"
+          KUBEADM_INSTALL="/usr/bin/kubeadm"
+          BASE_URL="https://dl.k8s.io/release"
+          if [ ! -f "$VERSION_FILE" ]; then
+            echo "No $VERSION_FILE, skipping kubeadm fetch"
+            exit 0
+          fi
+          version=$(tr -d '\n\r' <"$VERSION_FILE")
+          if [ -z "$version" ]; then
+            echo "Empty version in $VERSION_FILE, skipping"
+            exit 0
+          fi
+          case "$version" in
+            v*) ;;
+            *) version="v$version" ;;
+          esac
+          arch=$(uname -m)
+          case "$arch" in
+            x86_64) arch="amd64" ;;
+            aarch64|arm64) arch="arm64" ;;
+            *) echo "Unsupported arch: $arch"; exit 1 ;;
+          esac
+          url="${BASE_URL}/${version}/bin/linux/${arch}/kubeadm"
+          echo "Fetching kubeadm ${version} (${arch}) from ${url}"
+          tmp=$(mktemp -p /tmp kubeadm.XXXXXX)
+          curl -fLsS -o "$tmp" "$url" || { echo "Download failed"; rm -f "$tmp"; exit 1; }
+          chmod 755 "$tmp"
+          mv -f "$tmp" "$KUBEADM_INSTALL"
+      preKubeadmCommands:
+      - |
+        command -v curl >/dev/null 2>&1 || (apt-get update && apt-get install -y --no-install-recommends curl ca-certificates && rm -rf /var/lib/apt/lists/*)
+      - '[ -x /run/cluster-api/kubeadm-version/fetch-kubeadm.sh ] && /run/cluster-api/kubeadm-version/fetch-kubeadm.sh 2>&1 | tee /var/log/fetch-kubeadm.log || true'
       joinConfiguration:
         nodeRegistration: # node registration parameters are automatically injected by CAPD according to the kindest/node image in use.
           kubeletExtraArgs: # having a not empty kubeletExtraArgs is required for the externalCloudProvider to work

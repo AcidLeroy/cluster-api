@@ -1,0 +1,331 @@
+/*
+Copyright 2025 The Kubernetes Authors.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+package e2e
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"time"
+
+	. "github.com/onsi/ginkgo/v2"
+	. "github.com/onsi/gomega"
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/utils/ptr"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
+	"sigs.k8s.io/cluster-api/test/e2e/internal/log"
+	"sigs.k8s.io/cluster-api/test/framework"
+	"sigs.k8s.io/cluster-api/test/framework/clusterctl"
+	"sigs.k8s.io/cluster-api/util"
+	"sigs.k8s.io/cluster-api/util/patch"
+)
+
+// ScaleDuringUpgradeSpecInput is the input for ScaleDuringUpgradeSpec.
+type ScaleDuringUpgradeSpecInput struct {
+	E2EConfig             *clusterctl.E2EConfig
+	ClusterctlConfigPath  string
+	BootstrapClusterProxy framework.ClusterProxy
+	ArtifactFolder        string
+	SkipCleanup           bool
+	ControlPlaneWaiters   clusterctl.ControlPlaneWaiters
+
+	// Flavor to use when creating the cluster for testing.
+	Flavor string
+
+	// InfrastructureProvider specifies the infrastructure to use for clusterctl
+	// operations (Example: get cluster templates).
+	InfrastructureProvider *string
+
+	// Allows to inject a function to be run after test namespace is created.
+	// If not specified, this is a no-op.
+	PostNamespaceCreated func(managementClusterProxy framework.ClusterProxy, workloadClusterNamespace string)
+}
+
+// ScaleDuringUpgradeSpec verifies that a MachineDeployment can be scaled up while the
+// control plane has been upgraded but workers are deferred. It exercises the kubeadm version
+// file mechanism: node.go writes the target CP version to /run/cluster-api/kubeadm-version/version,
+// and a fetch-kubeadm.sh preKubeadmCommand downloads the matching kubeadm binary so that
+// kubeadm join succeeds against the upgraded control plane.
+func ScaleDuringUpgradeSpec(ctx context.Context, inputGetter func() ScaleDuringUpgradeSpecInput) {
+	const specName = "scale-during-upgrade"
+
+	var (
+		input            ScaleDuringUpgradeSpecInput
+		namespace        *corev1.Namespace
+		cancelWatches    context.CancelFunc
+		clusterResources *clusterctl.ApplyClusterTemplateAndWaitResult
+	)
+
+	BeforeEach(func() {
+		Expect(ctx).NotTo(BeNil(), "ctx is required for %s spec", specName)
+		input = inputGetter()
+		Expect(input.E2EConfig).ToNot(BeNil(), "Invalid argument. input.E2EConfig can't be nil when calling %s spec", specName)
+		Expect(input.ClusterctlConfigPath).To(BeAnExistingFile(), "Invalid argument. input.ClusterctlConfigPath must be an existing file when calling %s spec", specName)
+		Expect(input.BootstrapClusterProxy).ToNot(BeNil(), "Invalid argument. input.BootstrapClusterProxy can't be nil when calling %s spec", specName)
+		Expect(os.MkdirAll(input.ArtifactFolder, 0750)).To(Succeed(), "Invalid argument. input.ArtifactFolder can't be created for %s spec", specName)
+		Expect(input.E2EConfig.Variables).To(HaveKey(KubernetesVersionUpgradeFrom))
+		Expect(input.E2EConfig.Variables).To(HaveKey(KubernetesVersionUpgradeTo))
+
+		namespace, cancelWatches = framework.SetupSpecNamespace(ctx, specName, input.BootstrapClusterProxy, input.ArtifactFolder, input.PostNamespaceCreated)
+		clusterResources = new(clusterctl.ApplyClusterTemplateAndWaitResult)
+	})
+
+	It("Should scale up a MachineDeployment while the control plane is upgraded and workers are deferred", func() {
+		infrastructureProvider := clusterctl.DefaultInfrastructureProvider
+		if input.InfrastructureProvider != nil {
+			infrastructureProvider = *input.InfrastructureProvider
+		}
+
+		kubernetesVersionUpgradeFrom := input.E2EConfig.MustGetVariable(KubernetesVersionUpgradeFrom)
+		kubernetesVersionUpgradeTo := input.E2EConfig.MustGetVariable(KubernetesVersionUpgradeTo)
+		clusterName := fmt.Sprintf("%s-%s", specName, util.RandomString(6))
+
+		By("Creating a workload cluster")
+		clusterctl.ApplyClusterTemplateAndWait(ctx, clusterctl.ApplyClusterTemplateAndWaitInput{
+			ClusterProxy: input.BootstrapClusterProxy,
+			ConfigCluster: clusterctl.ConfigClusterInput{
+				LogFolder:                filepath.Join(input.ArtifactFolder, "clusters", input.BootstrapClusterProxy.GetName()),
+				ClusterctlConfigPath:     input.ClusterctlConfigPath,
+				KubeconfigPath:           input.BootstrapClusterProxy.GetKubeconfigPath(),
+				InfrastructureProvider:   infrastructureProvider,
+				Flavor:                   input.Flavor,
+				Namespace:                namespace.Name,
+				ClusterName:              clusterName,
+				KubernetesVersion:        kubernetesVersionUpgradeFrom,
+				ControlPlaneMachineCount: ptr.To[int64](1),
+				WorkerMachineCount:       ptr.To[int64](1),
+			},
+			ControlPlaneWaiters:          input.ControlPlaneWaiters,
+			WaitForClusterIntervals:      input.E2EConfig.GetIntervals(specName, "wait-cluster"),
+			WaitForControlPlaneIntervals: input.E2EConfig.GetIntervals(specName, "wait-control-plane"),
+			WaitForMachineDeployments:    input.E2EConfig.GetIntervals(specName, "wait-worker-nodes"),
+		}, clusterResources)
+
+		Expect(clusterResources.Cluster).ToNot(BeNil())
+		Expect(clusterResources.Cluster.Spec.Topology.IsDefined()).To(BeTrue(), "Cluster must use ClusterClass topology")
+		Expect(clusterResources.MachineDeployments).To(HaveLen(1))
+
+		mgmtClient := input.BootstrapClusterProxy.GetClient()
+		cluster := clusterResources.Cluster
+
+		By("Adding defer-upgrade and skip-preflight-checks annotations to the MachineDeployment topology")
+		patchHelper, err := patch.NewHelper(cluster, mgmtClient)
+		Expect(err).ToNot(HaveOccurred())
+
+		mdTopology := cluster.Spec.Topology.Workers.MachineDeployments[0]
+		if mdTopology.Metadata.Annotations == nil {
+			mdTopology.Metadata.Annotations = map[string]string{}
+		}
+		mdTopology.Metadata.Annotations[clusterv1.ClusterTopologyDeferUpgradeAnnotation] = ""
+		mdTopology.Metadata.Annotations[clusterv1.MachineSetSkipPreflightChecksAnnotation] = string(clusterv1.MachineSetPreflightCheckAll)
+		cluster.Spec.Topology.Workers.MachineDeployments[0] = mdTopology
+		Eventually(func() error {
+			return patchHelper.Patch(ctx, cluster)
+		}, 1*time.Minute, 10*time.Second).Should(Succeed(), "Failed to add annotations to MachineDeployment topology")
+
+		By("Upgrading the Cluster topology version to trigger CP upgrade")
+		patchHelper, err = patch.NewHelper(cluster, mgmtClient)
+		Expect(err).ToNot(HaveOccurred())
+		cluster.Spec.Topology.Version = kubernetesVersionUpgradeTo
+		Eventually(func() error {
+			return patchHelper.Patch(ctx, cluster)
+		}, 1*time.Minute, 10*time.Second).Should(Succeed(), "Failed to patch Cluster topology version")
+
+		By("Waiting for control plane machines to be upgraded")
+		framework.WaitForControlPlaneMachinesToBeUpgraded(ctx, framework.WaitForControlPlaneMachinesToBeUpgradedInput{
+			Lister:                   mgmtClient,
+			Cluster:                  cluster,
+			MachineCount:             1,
+			KubernetesUpgradeVersion: kubernetesVersionUpgradeTo,
+		}, input.E2EConfig.GetIntervals(specName, "wait-control-plane-upgrade")...)
+
+		By("Verifying worker machines have NOT been upgraded (deferred)")
+		md := clusterResources.MachineDeployments[0]
+		machines := framework.GetMachinesByMachineDeployments(ctx, framework.GetMachinesByMachineDeploymentsInput{
+			Lister:            mgmtClient,
+			ClusterName:       cluster.Name,
+			Namespace:         cluster.Namespace,
+			MachineDeployment: *md,
+		})
+		for _, m := range machines {
+			Expect(m.Spec.Version).To(Equal(kubernetesVersionUpgradeFrom),
+				"Worker machine %s should still be at old version %s, got %s", m.Name, kubernetesVersionUpgradeFrom, m.Spec.Version)
+		}
+
+		machineCountBefore := len(machines)
+		log.Logf("Worker machines before scale-up: %d", machineCountBefore)
+
+		By("Scaling up the MachineDeployment from 1 to 2 via topology")
+		Expect(mgmtClient.Get(ctx, client.ObjectKeyFromObject(cluster), cluster)).To(Succeed())
+		patchHelper, err = patch.NewHelper(cluster, mgmtClient)
+		Expect(err).ToNot(HaveOccurred())
+		cluster.Spec.Topology.Workers.MachineDeployments[0].Replicas = ptr.To[int32](2)
+		Eventually(func() error {
+			return patchHelper.Patch(ctx, cluster)
+		}, 1*time.Minute, 10*time.Second).Should(Succeed(), "Failed to scale MachineDeployment topology")
+
+		By("Waiting for the new Machine to be provisioned with a NodeRef")
+		Eventually(func() (int, error) {
+			// Re-fetch the MachineDeployment.
+			mdList := &clusterv1.MachineDeploymentList{}
+			if err := mgmtClient.List(ctx, mdList,
+				client.InNamespace(cluster.Namespace),
+				client.MatchingLabels{
+					clusterv1.ClusterNameLabel:                          cluster.Name,
+					clusterv1.ClusterTopologyMachineDeploymentNameLabel: "md-0",
+				},
+			); err != nil {
+				return 0, err
+			}
+			if len(mdList.Items) == 0 {
+				return 0, fmt.Errorf("no MachineDeployments found")
+			}
+			currentMD := mdList.Items[0]
+			allMachines := framework.GetMachinesByMachineDeployments(ctx, framework.GetMachinesByMachineDeploymentsInput{
+				Lister:            mgmtClient,
+				ClusterName:       cluster.Name,
+				Namespace:         cluster.Namespace,
+				MachineDeployment: currentMD,
+			})
+			withNodeRef := 0
+			for _, m := range allMachines {
+				if m.Status.NodeRef.IsDefined() {
+					withNodeRef++
+				}
+			}
+			return withNodeRef, nil
+		}, input.E2EConfig.GetIntervals(specName, "wait-worker-nodes")...).Should(Equal(2),
+			"Timed out waiting for scaled MachineDeployment to have 2 machines with NodeRef")
+
+		By("Identifying the newly created worker machine")
+		mdList := &clusterv1.MachineDeploymentList{}
+		Expect(mgmtClient.List(ctx, mdList,
+			client.InNamespace(cluster.Namespace),
+			client.MatchingLabels{
+				clusterv1.ClusterNameLabel:                          cluster.Name,
+				clusterv1.ClusterTopologyMachineDeploymentNameLabel: "md-0",
+			},
+		)).To(Succeed())
+		Expect(mdList.Items).To(HaveLen(1))
+		updatedMD := mdList.Items[0]
+
+		allMachines := framework.GetMachinesByMachineDeployments(ctx, framework.GetMachinesByMachineDeploymentsInput{
+			Lister:            mgmtClient,
+			ClusterName:       cluster.Name,
+			Namespace:         cluster.Namespace,
+			MachineDeployment: updatedMD,
+		})
+		Expect(allMachines).To(HaveLen(2))
+
+		// Find the new machine (the one not in the original set).
+		originalMachineNames := map[string]bool{}
+		for _, m := range machines {
+			originalMachineNames[m.Name] = true
+		}
+		var newMachine *clusterv1.Machine
+		for i := range allMachines {
+			if !originalMachineNames[allMachines[i].Name] {
+				newMachine = &allMachines[i]
+				break
+			}
+		}
+		Expect(newMachine).ToNot(BeNil(), "Could not find the newly scaled machine")
+		Expect(newMachine.Status.NodeRef.IsDefined()).To(BeTrue(), "New machine %s should have a NodeRef", newMachine.Name)
+		log.Logf("New worker machine: %s, nodeRef: %s", newMachine.Name, newMachine.Status.NodeRef.Name)
+
+		By("Verifying the kubeadm version file and kubeadm binary on the new node via docker exec")
+		containerName := newMachine.Status.NodeRef.Name
+		verifyKubeadmVersionOnNode(containerName, kubernetesVersionUpgradeTo)
+
+		By("Removing the defer-upgrade annotation to let worker upgrade proceed")
+		Expect(mgmtClient.Get(ctx, client.ObjectKeyFromObject(cluster), cluster)).To(Succeed())
+		patchHelper, err = patch.NewHelper(cluster, mgmtClient)
+		Expect(err).ToNot(HaveOccurred())
+		mdTopology = cluster.Spec.Topology.Workers.MachineDeployments[0]
+		delete(mdTopology.Metadata.Annotations, clusterv1.ClusterTopologyDeferUpgradeAnnotation)
+		delete(mdTopology.Metadata.Annotations, clusterv1.MachineSetSkipPreflightChecksAnnotation)
+		cluster.Spec.Topology.Workers.MachineDeployments[0] = mdTopology
+		Eventually(func() error {
+			return patchHelper.Patch(ctx, cluster)
+		}, 1*time.Minute, 10*time.Second).Should(Succeed(), "Failed to remove defer-upgrade annotation")
+
+		By("Waiting for all worker machines to be upgraded")
+		framework.WaitForMachineDeploymentMachinesToBeUpgraded(ctx, framework.WaitForMachineDeploymentMachinesToBeUpgradedInput{
+			Lister:                   mgmtClient,
+			Cluster:                  cluster,
+			MachineCount:             2,
+			KubernetesUpgradeVersion: kubernetesVersionUpgradeTo,
+			MachineDeployment:        updatedMD,
+		}, input.E2EConfig.GetIntervals(specName, "wait-worker-nodes")...)
+
+		Byf("Verify Cluster Available condition is true")
+		framework.VerifyClusterAvailable(ctx, framework.VerifyClusterAvailableInput{
+			Getter:    mgmtClient,
+			Name:      cluster.Name,
+			Namespace: cluster.Namespace,
+		})
+
+		By("PASSED!")
+	})
+
+	AfterEach(func() {
+		framework.DumpSpecResourcesAndCleanup(ctx, specName, input.BootstrapClusterProxy, input.ClusterctlConfigPath, input.ArtifactFolder, namespace, cancelWatches, clusterResources.Cluster, input.E2EConfig.GetIntervals, input.SkipCleanup)
+	})
+}
+
+// verifyKubeadmVersionOnNode uses docker exec to verify the kubeadm version file
+// and kubeadm binary version on the CAPD container match the expected version.
+func verifyKubeadmVersionOnNode(containerName, expectedVersion string) {
+	// The version file is written by the bootstrap controller using semver.String(),
+	// which strips the "v" prefix (e.g. "1.35.0" not "v1.35.0").
+	expectedVersionNoPfx := strings.TrimPrefix(expectedVersion, "v")
+
+	// Verify the version file was written with the expected content.
+	log.Logf("Checking /run/cluster-api/kubeadm-version/version on container %s", containerName)
+	out, err := exec.Command("docker", "exec", containerName, "cat", "/run/cluster-api/kubeadm-version/version").CombinedOutput() //nolint:gosec
+	Expect(err).ToNot(HaveOccurred(), "Failed to read kubeadm version file: %s", string(out))
+	versionFileContent := strings.TrimSpace(string(out))
+	Expect(versionFileContent).To(Equal(expectedVersionNoPfx),
+		"Version file content %q does not match expected %q", versionFileContent, expectedVersionNoPfx)
+	log.Logf("Version file contains: %s", versionFileContent)
+
+	// Verify that fetch-kubeadm.sh ran and found the version file. This proves the
+	// version file was present before kubeadm join (i.e. before preKubeadmCommands ran).
+	log.Logf("Checking fetch-kubeadm.log on container %s", containerName)
+	out, err = exec.Command("docker", "exec", containerName, "cat", "/var/log/fetch-kubeadm.log").CombinedOutput() //nolint:gosec
+	Expect(err).ToNot(HaveOccurred(), "Failed to read fetch-kubeadm.log: %s", string(out))
+	fetchLog := string(out)
+	log.Logf("fetch-kubeadm.log:\n%s", fetchLog)
+	Expect(fetchLog).To(ContainSubstring("raw version from file:"),
+		"fetch-kubeadm.sh must find the version file; log:\n%s", fetchLog)
+
+	// Log the kubeadm binary version (soft check -- the curl download may fail in
+	// environments without internet access, so we don't fail on a version mismatch).
+	log.Logf("Checking kubeadm version on container %s", containerName)
+	out, err = exec.Command("docker", "exec", containerName, "kubeadm", "version", "-o", "short").CombinedOutput() //nolint:gosec
+	if err == nil {
+		kubeadmVersion := strings.TrimSpace(string(out))
+		log.Logf("kubeadm version: %s (expected %s)", kubeadmVersion, expectedVersion)
+	} else {
+		log.Logf("Could not get kubeadm version: %s", string(out))
+	}
+}

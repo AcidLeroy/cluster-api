@@ -34,4 +34,8 @@ spec:
       - class: default-worker
         name: md-0
         replicas: ${WORKER_MACHINE_COUNT}
+        # Disable MachineHealthCheck so nodes are not replaced when e.g. CNI is not running
+        # or during scale-during-upgrade flows (avoids unwanted remediation).
+        healthCheck:
+          enabled: false
 ---
