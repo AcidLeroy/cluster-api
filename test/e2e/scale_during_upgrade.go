@@ -17,10 +17,10 @@ limitations under the License.
 package e2e
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -35,6 +35,7 @@ import (
 	"sigs.k8s.io/cluster-api/test/e2e/internal/log"
 	"sigs.k8s.io/cluster-api/test/framework"
 	"sigs.k8s.io/cluster-api/test/framework/clusterctl"
+	"sigs.k8s.io/cluster-api/test/infrastructure/container"
 	"sigs.k8s.io/cluster-api/util"
 	"sigs.k8s.io/cluster-api/util/patch"
 )
@@ -252,9 +253,9 @@ func ScaleDuringUpgradeSpec(ctx context.Context, inputGetter func() ScaleDuringU
 		Expect(newMachine.Status.NodeRef.IsDefined()).To(BeTrue(), "New machine %s should have a NodeRef", newMachine.Name)
 		log.Logf("New worker machine: %s, nodeRef: %s", newMachine.Name, newMachine.Status.NodeRef.Name)
 
-		By("Verifying the kubeadm version file and kubeadm binary on the new node via docker exec")
+		By("Verifying the kubeadm version file and kubeadm binary on the new node")
 		containerName := newMachine.Status.NodeRef.Name
-		verifyKubeadmVersionOnNode(containerName, kubernetesVersionUpgradeTo)
+		verifyKubeadmVersionOnNode(ctx, containerName, kubernetesVersionUpgradeTo)
 
 		By("Removing the defer-upgrade annotation to let worker upgrade proceed")
 		Expect(mgmtClient.Get(ctx, client.ObjectKeyFromObject(cluster), cluster)).To(Succeed())
@@ -292,18 +293,21 @@ func ScaleDuringUpgradeSpec(ctx context.Context, inputGetter func() ScaleDuringU
 	})
 }
 
-// verifyKubeadmVersionOnNode uses docker exec to verify the kubeadm version file
-// and kubeadm binary version on the CAPD container match the expected version.
-func verifyKubeadmVersionOnNode(containerName, expectedVersion string) {
+// verifyKubeadmVersionOnNode verifies the kubeadm version file and kubeadm binary
+// version on the CAPD container match the expected version.
+func verifyKubeadmVersionOnNode(ctx context.Context, containerName, expectedVersion string) {
+	containerRuntime, err := container.NewDockerClient()
+	Expect(err).ToNot(HaveOccurred(), "Failed to create container runtime client")
+
 	// The version file is written by the bootstrap controller using semver.String(),
 	// which strips the "v" prefix (e.g. "1.35.0" not "v1.35.0").
 	expectedVersionNoPfx := strings.TrimPrefix(expectedVersion, "v")
 
 	// Verify the version file was written with the expected content.
 	log.Logf("Checking /run/cluster-api/kubeadm-version/version on container %s", containerName)
-	out, err := exec.Command("docker", "exec", containerName, "cat", "/run/cluster-api/kubeadm-version/version").CombinedOutput() //nolint:gosec
-	Expect(err).ToNot(HaveOccurred(), "Failed to read kubeadm version file: %s", string(out))
-	versionFileContent := strings.TrimSpace(string(out))
+	out, err := execInContainer(ctx, containerRuntime, containerName, "cat", "/run/cluster-api/kubeadm-version/version")
+	Expect(err).ToNot(HaveOccurred(), "Failed to read kubeadm version file: %s", out)
+	versionFileContent := strings.TrimSpace(out)
 	Expect(versionFileContent).To(Equal(expectedVersionNoPfx),
 		"Version file content %q does not match expected %q", versionFileContent, expectedVersionNoPfx)
 	log.Logf("Version file contains: %s", versionFileContent)
@@ -311,21 +315,31 @@ func verifyKubeadmVersionOnNode(containerName, expectedVersion string) {
 	// Verify that fetch-kubeadm.sh ran and found the version file. This proves the
 	// version file was present before kubeadm join (i.e. before preKubeadmCommands ran).
 	log.Logf("Checking fetch-kubeadm.log on container %s", containerName)
-	out, err = exec.Command("docker", "exec", containerName, "cat", "/var/log/fetch-kubeadm.log").CombinedOutput() //nolint:gosec
-	Expect(err).ToNot(HaveOccurred(), "Failed to read fetch-kubeadm.log: %s", string(out))
-	fetchLog := string(out)
-	log.Logf("fetch-kubeadm.log:\n%s", fetchLog)
-	Expect(fetchLog).To(ContainSubstring("raw version from file:"),
-		"fetch-kubeadm.sh must find the version file; log:\n%s", fetchLog)
+	out, err = execInContainer(ctx, containerRuntime, containerName, "cat", "/var/log/fetch-kubeadm.log")
+	Expect(err).ToNot(HaveOccurred(), "Failed to read fetch-kubeadm.log: %s", out)
+	log.Logf("fetch-kubeadm.log:\n%s", out)
+	Expect(out).To(ContainSubstring("raw version from file:"),
+		"fetch-kubeadm.sh must find the version file; log:\n%s", out)
 
 	// Log the kubeadm binary version (soft check -- the curl download may fail in
 	// environments without internet access, so we don't fail on a version mismatch).
 	log.Logf("Checking kubeadm version on container %s", containerName)
-	out, err = exec.Command("docker", "exec", containerName, "kubeadm", "version", "-o", "short").CombinedOutput() //nolint:gosec
+	out, err = execInContainer(ctx, containerRuntime, containerName, "kubeadm", "version", "-o", "short")
 	if err == nil {
-		kubeadmVersion := strings.TrimSpace(string(out))
+		kubeadmVersion := strings.TrimSpace(out)
 		log.Logf("kubeadm version: %s (expected %s)", kubeadmVersion, expectedVersion)
 	} else {
-		log.Logf("Could not get kubeadm version: %s", string(out))
+		log.Logf("Could not get kubeadm version: %s", out)
 	}
+}
+
+// execInContainer runs a command in a container and returns the combined stdout/stderr output.
+func execInContainer(ctx context.Context, cr container.Runtime, containerName, command string, args ...string) (string, error) {
+	var stdout, stderr bytes.Buffer
+	err := cr.ExecContainer(ctx, containerName, &container.ExecContainerInput{
+		OutputBuffer: &stdout,
+		ErrorBuffer:  &stderr,
+	}, command, args...)
+	combined := stdout.String() + stderr.String()
+	return combined, err
 }
