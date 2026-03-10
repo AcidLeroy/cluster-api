@@ -195,54 +195,53 @@ func KubeadmVersionOnJoinSpec(ctx context.Context, inputGetter func() KubeadmVer
 			"Worker machine %s should still be at old version %s, got %s", originalMachine.Name, kubernetesVersionUpgradeFrom, originalMachine.Spec.Version)
 		log.Logf("Original worker machine: %s (version %s)", originalMachine.Name, originalMachine.Spec.Version)
 
-		By("Deleting the worker Machine to trigger a replacement")
-		Expect(mgmtClient.Delete(ctx, &originalMachine)).To(Succeed(), "Failed to delete worker Machine %s", originalMachine.Name)
-		log.Logf("Deleted worker machine: %s", originalMachine.Name)
+		By("Scaling the MachineDeployment directly to 2 replicas")
+		// The topology controller skips MachineDeployment reconciliation while the upgrade is
+		// deferred, so we scale the underlying MachineDeployment object directly.
+		Expect(mgmtClient.Get(ctx, client.ObjectKeyFromObject(md), md)).To(Succeed())
+		framework.ScaleAndWaitMachineDeployment(ctx, framework.ScaleAndWaitMachineDeploymentInput{
+			ClusterProxy:              input.BootstrapClusterProxy,
+			Cluster:                   cluster,
+			MachineDeployment:         md,
+			Replicas:                  2,
+			WaitForMachineDeployments: input.E2EConfig.GetIntervals(specName, "wait-worker-nodes"),
+		})
 
-		By("Waiting for a replacement Machine with a NodeRef")
-		var replacementMachine *clusterv1.Machine
-		Eventually(func() error {
-			currentMachines := framework.GetMachinesByMachineDeployments(ctx, framework.GetMachinesByMachineDeploymentsInput{
-				Lister:            mgmtClient,
-				ClusterName:       cluster.Name,
-				Namespace:         cluster.Namespace,
-				MachineDeployment: *md,
-			})
-			for i := range currentMachines {
-				m := &currentMachines[i]
-				if m.Name == originalMachine.Name {
-					continue
-				}
-				if m.DeletionTimestamp != nil {
-					continue
-				}
-				if !m.Status.NodeRef.IsDefined() {
-					return fmt.Errorf("replacement Machine %s exists but has no NodeRef yet", m.Name)
-				}
-				replacementMachine = m
-				return nil
+		By("Identifying the new worker Machine")
+		currentMachines := framework.GetMachinesByMachineDeployments(ctx, framework.GetMachinesByMachineDeploymentsInput{
+			Lister:            mgmtClient,
+			ClusterName:       cluster.Name,
+			Namespace:         cluster.Namespace,
+			MachineDeployment: *md,
+		})
+		var newMachine *clusterv1.Machine
+		for i := range currentMachines {
+			if currentMachines[i].Name != originalMachine.Name {
+				newMachine = &currentMachines[i]
+				break
 			}
-			return fmt.Errorf("no replacement Machine found yet (original: %s)", originalMachine.Name)
-		}, input.E2EConfig.GetIntervals(specName, "wait-worker-nodes")...).Should(Succeed(),
-			"Timed out waiting for replacement Machine with NodeRef")
+		}
+		Expect(newMachine).ToNot(BeNil(), "Could not find new Machine (original: %s)", originalMachine.Name)
+		log.Logf("New worker machine: %s, nodeRef: %s", newMachine.Name, newMachine.Status.NodeRef.Name)
 
-		log.Logf("Replacement worker machine: %s, nodeRef: %s", replacementMachine.Name, replacementMachine.Status.NodeRef.Name)
-
-		By("Verifying the kubeadm version file and fetch-kubeadm.sh on the replacement node")
-		containerName := replacementMachine.Status.NodeRef.Name
+		By("Verifying the kubeadm version file and fetch-kubeadm.sh on the new node")
+		containerName := newMachine.Status.NodeRef.Name
 		verifyKubeadmVersionOnNode(ctx, containerName, kubernetesVersionUpgradeTo)
 
-		By("Removing the defer-upgrade and skip-preflight-checks annotations to let worker upgrade proceed")
+		By("Removing the defer-upgrade and skip-preflight-checks annotations and syncing topology replicas")
+		// Update the topology replicas to 2 to match the direct MD scaling we did above,
+		// so the topology controller doesn't scale the MachineDeployment back down.
 		Expect(mgmtClient.Get(ctx, client.ObjectKeyFromObject(cluster), cluster)).To(Succeed())
 		patchHelper, err = patch.NewHelper(cluster, mgmtClient)
 		Expect(err).ToNot(HaveOccurred())
 		mdTopology = cluster.Spec.Topology.Workers.MachineDeployments[0]
 		delete(mdTopology.Metadata.Annotations, clusterv1.ClusterTopologyDeferUpgradeAnnotation)
 		delete(mdTopology.Metadata.Annotations, clusterv1.MachineSetSkipPreflightChecksAnnotation)
+		mdTopology.Replicas = ptr.To[int32](2)
 		cluster.Spec.Topology.Workers.MachineDeployments[0] = mdTopology
 		Eventually(func() error {
 			return patchHelper.Patch(ctx, cluster)
-		}, 1*time.Minute, 10*time.Second).Should(Succeed(), "Failed to remove annotations")
+		}, 1*time.Minute, 10*time.Second).Should(Succeed(), "Failed to remove annotations and sync replicas")
 
 		By("Waiting for all worker machines to be upgraded")
 		mdList := &clusterv1.MachineDeploymentList{}
@@ -257,7 +256,7 @@ func KubeadmVersionOnJoinSpec(ctx context.Context, inputGetter func() KubeadmVer
 		framework.WaitForMachineDeploymentMachinesToBeUpgraded(ctx, framework.WaitForMachineDeploymentMachinesToBeUpgradedInput{
 			Lister:                   mgmtClient,
 			Cluster:                  cluster,
-			MachineCount:             1,
+			MachineCount:             2,
 			KubernetesUpgradeVersion: kubernetesVersionUpgradeTo,
 			MachineDeployment:        mdList.Items[0],
 		}, input.E2EConfig.GetIntervals(specName, "wait-worker-nodes")...)
