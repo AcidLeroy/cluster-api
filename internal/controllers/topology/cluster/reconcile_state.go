@@ -723,34 +723,11 @@ func (r *Reconciler) updateMachineDeployment(ctx context.Context, s *scope.Scope
 		return nil
 	}
 
-	// If the MachineDeployment is pending an upgrade, skip template rotation to avoid a double
-	// rollout, but still propagate replica and annotation changes via SSA patch.
-	// Pin template refs to current values so no template-related changes are included.
+	// Return early if the MachineDeployment is pending an upgrade.
+	// Do not reconcile the MachineDeployment yet to avoid updating the MachineDeployment while it is still pending a
+	// version upgrade. This will prevent the MachineDeployment from performing a double rollout.
 	if s.UpgradeTracker.MachineDeployments.IsPendingUpgrade(currentMD.Object.Name) {
-		desiredMD.Object.Spec.Template.Spec.InfrastructureRef = currentMD.Object.Spec.Template.Spec.InfrastructureRef
-		desiredMD.Object.Spec.Template.Spec.Bootstrap.ConfigRef = currentMD.Object.Spec.Template.Spec.Bootstrap.ConfigRef
-
-		patchHelper, err := structuredmerge.NewServerSidePatchHelper(ctx, currentMD.Object, desiredMD.Object, r.Client, r.ssaCache)
-		if err != nil {
-			return errors.Wrapf(err, "failed to create patch helper for %s", klog.KObj(currentMD.Object))
-		}
-		if !patchHelper.HasChanges() {
-			log.V(3).Info("No changes for MachineDeployment during pending upgrade")
-			return nil
-		}
-
-		log.Info("Patching MachineDeployment during pending upgrade (replica/annotation changes only)",
-			"diff", patchHelper.Diff(), "patch", patchHelper.PatchData())
-		modifiedResourceVersion, err := patchHelper.Patch(ctx)
-		if err != nil {
-			return errors.Wrapf(err, "failed to patch %s during pending upgrade", klog.KObj(currentMD.Object))
-		}
-		r.recorder.Eventf(s.Current.Cluster, corev1.EventTypeNormal, updateEventReason,
-			"Updated MachineDeployment %q replicas/annotations during pending upgrade", klog.KObj(currentMD.Object))
-
-		md := currentMD.Object.DeepCopy()
-		md.ResourceVersion = modifiedResourceVersion
-		return clientutil.WaitForCacheToBeUpToDate(ctx, r.Client, "MachineDeployment update", md)
+		return nil
 	}
 
 	cluster := s.Current.Cluster

@@ -40,8 +40,8 @@ import (
 	"sigs.k8s.io/cluster-api/util/patch"
 )
 
-// ScaleDuringUpgradeSpecInput is the input for ScaleDuringUpgradeSpec.
-type ScaleDuringUpgradeSpecInput struct {
+// KubeadmVersionOnJoinSpecInput is the input for KubeadmVersionOnJoinSpec.
+type KubeadmVersionOnJoinSpecInput struct {
 	E2EConfig             *clusterctl.E2EConfig
 	ClusterctlConfigPath  string
 	BootstrapClusterProxy framework.ClusterProxy
@@ -61,16 +61,16 @@ type ScaleDuringUpgradeSpecInput struct {
 	PostNamespaceCreated func(managementClusterProxy framework.ClusterProxy, workloadClusterNamespace string)
 }
 
-// ScaleDuringUpgradeSpec verifies that a MachineDeployment can be scaled up while the
-// control plane has been upgraded but workers are deferred. It exercises the kubeadm version
-// file mechanism: node.go writes the target CP version to /run/cluster-api/kubeadm-version/version,
-// and a fetch-kubeadm.sh preKubeadmCommand downloads the matching kubeadm binary so that
-// kubeadm join succeeds against the upgraded control plane.
-func ScaleDuringUpgradeSpec(ctx context.Context, inputGetter func() ScaleDuringUpgradeSpecInput) {
-	const specName = "scale-during-upgrade"
+// KubeadmVersionOnJoinSpec verifies that when a worker Machine joins a cluster during an
+// upgrade, the bootstrap controller uses the control plane's Kubernetes version for the
+// kubeadm version file. A fetch-kubeadm.sh preKubeadmCommand then downloads the matching
+// kubeadm binary so that kubeadm join succeeds against the upgraded control plane, even
+// though the worker's spec version is still the old version.
+func KubeadmVersionOnJoinSpec(ctx context.Context, inputGetter func() KubeadmVersionOnJoinSpecInput) {
+	const specName = "kubeadm-version-on-join"
 
 	var (
-		input            ScaleDuringUpgradeSpecInput
+		input            KubeadmVersionOnJoinSpecInput
 		namespace        *corev1.Namespace
 		cancelWatches    context.CancelFunc
 		clusterResources *clusterctl.ApplyClusterTemplateAndWaitResult
@@ -90,7 +90,7 @@ func ScaleDuringUpgradeSpec(ctx context.Context, inputGetter func() ScaleDuringU
 		clusterResources = new(clusterctl.ApplyClusterTemplateAndWaitResult)
 	})
 
-	It("Should scale up a MachineDeployment while the control plane is upgraded and workers are deferred", func() {
+	It("Should use the control plane kubeadm version when a worker joins during an upgrade", func() {
 		infrastructureProvider := clusterctl.DefaultInfrastructureProvider
 		if input.InfrastructureProvider != nil {
 			infrastructureProvider = *input.InfrastructureProvider
@@ -143,6 +143,28 @@ func ScaleDuringUpgradeSpec(ctx context.Context, inputGetter func() ScaleDuringU
 			return patchHelper.Patch(ctx, cluster)
 		}, 1*time.Minute, 10*time.Second).Should(Succeed(), "Failed to add annotations to MachineDeployment topology")
 
+		By("Waiting for the skip-preflight-checks annotation to propagate to the MachineSet")
+		Eventually(func() bool {
+			msList := &clusterv1.MachineSetList{}
+			if err := mgmtClient.List(ctx, msList,
+				client.InNamespace(cluster.Namespace),
+				client.MatchingLabels{
+					clusterv1.ClusterNameLabel:                          cluster.Name,
+					clusterv1.ClusterTopologyMachineDeploymentNameLabel: "md-0",
+				},
+			); err != nil {
+				return false
+			}
+			for i := range msList.Items {
+				if v, ok := msList.Items[i].Annotations[clusterv1.MachineSetSkipPreflightChecksAnnotation]; ok && v != "" {
+					log.Logf("MachineSet %s has skip-preflight-checks annotation: %s", msList.Items[i].Name, v)
+					return true
+				}
+			}
+			return false
+		}, 2*time.Minute, 5*time.Second).Should(BeTrue(),
+			"Timed out waiting for skip-preflight-checks annotation to propagate to MachineSet")
+
 		By("Upgrading the Cluster topology version to trigger CP upgrade")
 		patchHelper, err = patch.NewHelper(cluster, mgmtClient)
 		Expect(err).ToNot(HaveOccurred())
@@ -167,97 +189,50 @@ func ScaleDuringUpgradeSpec(ctx context.Context, inputGetter func() ScaleDuringU
 			Namespace:         cluster.Namespace,
 			MachineDeployment: *md,
 		})
-		for _, m := range machines {
-			Expect(m.Spec.Version).To(Equal(kubernetesVersionUpgradeFrom),
-				"Worker machine %s should still be at old version %s, got %s", m.Name, kubernetesVersionUpgradeFrom, m.Spec.Version)
-		}
+		Expect(machines).To(HaveLen(1), "Expected exactly 1 worker machine")
+		originalMachine := machines[0]
+		Expect(originalMachine.Spec.Version).To(Equal(kubernetesVersionUpgradeFrom),
+			"Worker machine %s should still be at old version %s, got %s", originalMachine.Name, kubernetesVersionUpgradeFrom, originalMachine.Spec.Version)
+		log.Logf("Original worker machine: %s (version %s)", originalMachine.Name, originalMachine.Spec.Version)
 
-		machineCountBefore := len(machines)
-		log.Logf("Worker machines before scale-up: %d", machineCountBefore)
+		By("Deleting the worker Machine to trigger a replacement")
+		Expect(mgmtClient.Delete(ctx, &originalMachine)).To(Succeed(), "Failed to delete worker Machine %s", originalMachine.Name)
+		log.Logf("Deleted worker machine: %s", originalMachine.Name)
 
-		By("Scaling up the MachineDeployment from 1 to 2 via topology")
-		Expect(mgmtClient.Get(ctx, client.ObjectKeyFromObject(cluster), cluster)).To(Succeed())
-		patchHelper, err = patch.NewHelper(cluster, mgmtClient)
-		Expect(err).ToNot(HaveOccurred())
-		cluster.Spec.Topology.Workers.MachineDeployments[0].Replicas = ptr.To[int32](2)
+		By("Waiting for a replacement Machine with a NodeRef")
+		var replacementMachine *clusterv1.Machine
 		Eventually(func() error {
-			return patchHelper.Patch(ctx, cluster)
-		}, 1*time.Minute, 10*time.Second).Should(Succeed(), "Failed to scale MachineDeployment topology")
-
-		By("Waiting for the new Machine to be provisioned with a NodeRef")
-		Eventually(func() (int, error) {
-			// Re-fetch the MachineDeployment.
-			mdList := &clusterv1.MachineDeploymentList{}
-			if err := mgmtClient.List(ctx, mdList,
-				client.InNamespace(cluster.Namespace),
-				client.MatchingLabels{
-					clusterv1.ClusterNameLabel:                          cluster.Name,
-					clusterv1.ClusterTopologyMachineDeploymentNameLabel: "md-0",
-				},
-			); err != nil {
-				return 0, err
-			}
-			if len(mdList.Items) == 0 {
-				return 0, fmt.Errorf("no MachineDeployments found")
-			}
-			currentMD := mdList.Items[0]
-			allMachines := framework.GetMachinesByMachineDeployments(ctx, framework.GetMachinesByMachineDeploymentsInput{
+			currentMachines := framework.GetMachinesByMachineDeployments(ctx, framework.GetMachinesByMachineDeploymentsInput{
 				Lister:            mgmtClient,
 				ClusterName:       cluster.Name,
 				Namespace:         cluster.Namespace,
-				MachineDeployment: currentMD,
+				MachineDeployment: *md,
 			})
-			withNodeRef := 0
-			for _, m := range allMachines {
-				if m.Status.NodeRef.IsDefined() {
-					withNodeRef++
+			for i := range currentMachines {
+				m := &currentMachines[i]
+				if m.Name == originalMachine.Name {
+					continue
 				}
+				if m.DeletionTimestamp != nil {
+					continue
+				}
+				if !m.Status.NodeRef.IsDefined() {
+					return fmt.Errorf("replacement Machine %s exists but has no NodeRef yet", m.Name)
+				}
+				replacementMachine = m
+				return nil
 			}
-			return withNodeRef, nil
-		}, input.E2EConfig.GetIntervals(specName, "wait-worker-nodes")...).Should(Equal(2),
-			"Timed out waiting for scaled MachineDeployment to have 2 machines with NodeRef")
+			return fmt.Errorf("no replacement Machine found yet (original: %s)", originalMachine.Name)
+		}, input.E2EConfig.GetIntervals(specName, "wait-worker-nodes")...).Should(Succeed(),
+			"Timed out waiting for replacement Machine with NodeRef")
 
-		By("Identifying the newly created worker machine")
-		mdList := &clusterv1.MachineDeploymentList{}
-		Expect(mgmtClient.List(ctx, mdList,
-			client.InNamespace(cluster.Namespace),
-			client.MatchingLabels{
-				clusterv1.ClusterNameLabel:                          cluster.Name,
-				clusterv1.ClusterTopologyMachineDeploymentNameLabel: "md-0",
-			},
-		)).To(Succeed())
-		Expect(mdList.Items).To(HaveLen(1))
-		updatedMD := mdList.Items[0]
+		log.Logf("Replacement worker machine: %s, nodeRef: %s", replacementMachine.Name, replacementMachine.Status.NodeRef.Name)
 
-		allMachines := framework.GetMachinesByMachineDeployments(ctx, framework.GetMachinesByMachineDeploymentsInput{
-			Lister:            mgmtClient,
-			ClusterName:       cluster.Name,
-			Namespace:         cluster.Namespace,
-			MachineDeployment: updatedMD,
-		})
-		Expect(allMachines).To(HaveLen(2))
-
-		// Find the new machine (the one not in the original set).
-		originalMachineNames := map[string]bool{}
-		for _, m := range machines {
-			originalMachineNames[m.Name] = true
-		}
-		var newMachine *clusterv1.Machine
-		for i := range allMachines {
-			if !originalMachineNames[allMachines[i].Name] {
-				newMachine = &allMachines[i]
-				break
-			}
-		}
-		Expect(newMachine).ToNot(BeNil(), "Could not find the newly scaled machine")
-		Expect(newMachine.Status.NodeRef.IsDefined()).To(BeTrue(), "New machine %s should have a NodeRef", newMachine.Name)
-		log.Logf("New worker machine: %s, nodeRef: %s", newMachine.Name, newMachine.Status.NodeRef.Name)
-
-		By("Verifying the kubeadm version file and kubeadm binary on the new node")
-		containerName := newMachine.Status.NodeRef.Name
+		By("Verifying the kubeadm version file and fetch-kubeadm.sh on the replacement node")
+		containerName := replacementMachine.Status.NodeRef.Name
 		verifyKubeadmVersionOnNode(ctx, containerName, kubernetesVersionUpgradeTo)
 
-		By("Removing the defer-upgrade annotation to let worker upgrade proceed")
+		By("Removing the defer-upgrade and skip-preflight-checks annotations to let worker upgrade proceed")
 		Expect(mgmtClient.Get(ctx, client.ObjectKeyFromObject(cluster), cluster)).To(Succeed())
 		patchHelper, err = patch.NewHelper(cluster, mgmtClient)
 		Expect(err).ToNot(HaveOccurred())
@@ -267,15 +242,24 @@ func ScaleDuringUpgradeSpec(ctx context.Context, inputGetter func() ScaleDuringU
 		cluster.Spec.Topology.Workers.MachineDeployments[0] = mdTopology
 		Eventually(func() error {
 			return patchHelper.Patch(ctx, cluster)
-		}, 1*time.Minute, 10*time.Second).Should(Succeed(), "Failed to remove defer-upgrade annotation")
+		}, 1*time.Minute, 10*time.Second).Should(Succeed(), "Failed to remove annotations")
 
 		By("Waiting for all worker machines to be upgraded")
+		mdList := &clusterv1.MachineDeploymentList{}
+		Expect(mgmtClient.List(ctx, mdList,
+			client.InNamespace(cluster.Namespace),
+			client.MatchingLabels{
+				clusterv1.ClusterNameLabel:                          cluster.Name,
+				clusterv1.ClusterTopologyMachineDeploymentNameLabel: "md-0",
+			},
+		)).To(Succeed())
+		Expect(mdList.Items).To(HaveLen(1))
 		framework.WaitForMachineDeploymentMachinesToBeUpgraded(ctx, framework.WaitForMachineDeploymentMachinesToBeUpgradedInput{
 			Lister:                   mgmtClient,
 			Cluster:                  cluster,
-			MachineCount:             2,
+			MachineCount:             1,
 			KubernetesUpgradeVersion: kubernetesVersionUpgradeTo,
-			MachineDeployment:        updatedMD,
+			MachineDeployment:        mdList.Items[0],
 		}, input.E2EConfig.GetIntervals(specName, "wait-worker-nodes")...)
 
 		Byf("Verify Cluster Available condition is true")

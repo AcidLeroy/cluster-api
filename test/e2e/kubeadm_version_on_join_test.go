@@ -24,9 +24,9 @@ import (
 	"k8s.io/utils/ptr"
 )
 
-var _ = Describe("When scaling a MachineDeployment during a deferred upgrade [ClusterClass]", Label("ClusterClass"), func() {
-	ScaleDuringUpgradeSpec(ctx, func() ScaleDuringUpgradeSpecInput {
-		return ScaleDuringUpgradeSpecInput{
+var _ = Describe("When a worker joins during a control plane upgrade [ClusterClass]", Label("ClusterClass"), func() {
+	KubeadmVersionOnJoinSpec(ctx, func() KubeadmVersionOnJoinSpecInput {
+		return KubeadmVersionOnJoinSpecInput{
 			E2EConfig:              e2eConfig,
 			ClusterctlConfigPath:   clusterctlConfigPath,
 			BootstrapClusterProxy:  bootstrapClusterProxy,
