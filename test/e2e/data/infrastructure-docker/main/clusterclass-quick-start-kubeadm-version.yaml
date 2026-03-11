@@ -279,19 +279,19 @@ spec:
         content: |
           #!/bin/sh
           set -e
-          VERSION_FILE="/run/cluster-api/kubeadm-version"
+          CC_FILE="/run/cluster-api/cluster-configuration.yaml"
           KUBEADM_INSTALL="/usr/bin/kubeadm"
           BASE_URL="https://dl.k8s.io/release"
           echo "fetch-kubeadm.sh: starting"
-          echo "fetch-kubeadm.sh: VERSION_FILE=$$VERSION_FILE KUBEADM_INSTALL=$$KUBEADM_INSTALL"
-          if [ ! -f "$$VERSION_FILE" ]; then
-            echo "fetch-kubeadm.sh: ERROR: $$VERSION_FILE not found, aborting"
+          echo "fetch-kubeadm.sh: CC_FILE=$$CC_FILE KUBEADM_INSTALL=$$KUBEADM_INSTALL"
+          if [ ! -f "$$CC_FILE" ]; then
+            echo "fetch-kubeadm.sh: ERROR: $$CC_FILE not found, aborting"
             exit 1
           fi
-          version=$$(tr -d '[:space:]' <"$$VERSION_FILE")
+          version=$$(grep '^kubernetesVersion:' "$$CC_FILE" | awk '{print $$2}' | tr -d '[:space:]')
           echo "fetch-kubeadm.sh: raw version from file: '$$version'"
           if [ -z "$$version" ]; then
-            echo "fetch-kubeadm.sh: ERROR: empty version in $$VERSION_FILE, aborting"
+            echo "fetch-kubeadm.sh: ERROR: kubernetesVersion not found in $$CC_FILE, aborting"
             exit 1
           fi
           case "$$version" in
@@ -333,7 +333,7 @@ spec:
       preKubeadmCommands:
       - |
         command -v curl >/dev/null 2>&1 || (apt-get update && apt-get install -y --no-install-recommends curl ca-certificates && rm -rf /var/lib/apt/lists/*)
-      - 'sh /run/cluster-api/kubeadm-version/fetch-kubeadm.sh 2>&1 | tee /var/log/fetch-kubeadm.log || true'
+      - 'sh /run/cluster-api/fetch-kubeadm.sh 2>&1 | tee /var/log/fetch-kubeadm.log || true'
       joinConfiguration:
         nodeRegistration:
           kubeletExtraArgs:

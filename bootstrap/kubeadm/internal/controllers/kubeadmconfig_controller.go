@@ -51,9 +51,8 @@ import (
 	"sigs.k8s.io/cluster-api/bootstrap/kubeadm/types/upstream"
 	bsutil "sigs.k8s.io/cluster-api/bootstrap/util"
 	"sigs.k8s.io/cluster-api/controllers/clustercache"
-	"sigs.k8s.io/cluster-api/controllers/external"
+	controlplanev1 "sigs.k8s.io/cluster-api/api/controlplane/kubeadm/v1beta2"
 	"sigs.k8s.io/cluster-api/feature"
-	"sigs.k8s.io/cluster-api/internal/contract"
 	"sigs.k8s.io/cluster-api/internal/util/taints"
 	"sigs.k8s.io/cluster-api/util"
 	"sigs.k8s.io/cluster-api/util/conditions"
@@ -688,16 +687,28 @@ func (r *KubeadmConfigReconciler) joinWorker(ctx context.Context, scope *Scope) 
 		return res, nil
 	}
 
-	// Use the control plane (cluster) version for worker join so that e.g. a 1.34 node uses kubeadm 1.35
-	// when the control plane is at 1.35. Fall back to the joining machine's version if the control plane
-	// version cannot be determined.
-	kubernetesVersion := r.getControlPlaneVersionForJoin(ctx, scope)
-	if kubernetesVersion == "" {
-		kubernetesVersion = scope.ConfigOwner.KubernetesVersion()
+	// Fetch the typed KCP so we can use the control plane version for kubeadm join and
+	// write the full ClusterConfiguration to disk for worker nodes.
+	kcp := r.getKCPForJoin(ctx, scope)
+	kubernetesVersion := scope.ConfigOwner.KubernetesVersion()
+	if kcp != nil && kcp.Spec.Version != "" {
+		kubernetesVersion = kcp.Spec.Version
 	}
 	parsedVersion, err := semver.ParseTolerant(kubernetesVersion)
 	if err != nil {
 		return ctrl.Result{}, errors.Wrapf(err, "failed to parse kubernetes version %q", kubernetesVersion)
+	}
+
+	// Build the ClusterConfiguration YAML to write to disk on the worker node.
+	var clusterConfigYAML string
+	if kcp != nil {
+		cc := kcp.Spec.KubeadmConfigSpec.ClusterConfiguration.DeepCopy()
+		ad := r.computeAdditionalDataForWorkerJoin(scope.Cluster, kcp)
+		clusterConfigYAML, err = kubeadmtypes.MarshalClusterConfigurationForVersion(cc, parsedVersion, ad)
+		if err != nil {
+			scope.Error(err, "Failed to marshal ClusterConfiguration for worker join")
+			return ctrl.Result{}, err
+		}
 	}
 
 	// Add the node uninitialized taint to the list of taints.
@@ -788,7 +799,8 @@ func (r *KubeadmConfigReconciler) joinWorker(ctx context.Context, scope *Scope) 
 			KubeadmVerbosity:  verbosityFlag,
 			KubernetesVersion: parsedVersion,
 		},
-		JoinConfiguration: joinData,
+		JoinConfiguration:      joinData,
+		ClusterConfigurationYAML: clusterConfigYAML,
 	}
 
 	var bootstrapJoinData []byte
@@ -816,30 +828,21 @@ func (r *KubeadmConfigReconciler) joinWorker(ctx context.Context, scope *Scope) 
 	return ctrl.Result{RequeueAfter: r.tokenCheckRefreshOrRotationInterval()}, nil
 }
 
-// getControlPlaneVersionForJoin returns the control plane (cluster) version from the cluster's ControlPlaneRef,
-// e.g. KubeadmControlPlane.spec.version. Returns empty string if the cluster has no ControlPlaneRef or the version
-// cannot be read (e.g. control plane not found or does not support version). Used for worker join so that
-// a 1.34 node uses kubeadm 1.35 when the control plane is at 1.35, for example.
-func (r *KubeadmConfigReconciler) getControlPlaneVersionForJoin(ctx context.Context, scope *Scope) string {
-	if !scope.Cluster.Spec.ControlPlaneRef.IsDefined() {
-		return ""
+// getKCPForJoin returns the typed KubeadmControlPlane from the cluster's ControlPlaneRef.
+// Returns nil if the cluster has no ControlPlaneRef or the KCP cannot be fetched.
+// Used for worker join so the bootstrap controller can read the control plane version
+// and ClusterConfiguration directly from the KCP spec.
+func (r *KubeadmConfigReconciler) getKCPForJoin(ctx context.Context, scope *Scope) *controlplanev1.KubeadmControlPlane {
+	ref := scope.Cluster.Spec.ControlPlaneRef
+	if !ref.IsDefined() {
+		return nil
 	}
-	controlPlane, err := external.GetObjectFromContractVersionedRef(ctx, r.Client, scope.Cluster.Spec.ControlPlaneRef, scope.Cluster.Namespace)
-	if err != nil {
-		scope.V(4).Info("Could not get control plane for version, falling back to machine version", "error", err)
-		return ""
+	kcp := &controlplanev1.KubeadmControlPlane{}
+	if err := r.Client.Get(ctx, client.ObjectKey{Namespace: scope.Cluster.Namespace, Name: ref.Name}, kcp); err != nil {
+		scope.V(4).Info("Could not get KubeadmControlPlane, falling back to machine version", "error", err)
+		return nil
 	}
-	cpVersion, err := contract.ControlPlane().Version().Get(controlPlane)
-	if err != nil {
-		if !errors.Is(err, contract.ErrFieldNotFound) {
-			scope.V(4).Info("Could not get control plane version, falling back to machine version", "error", err)
-		}
-		return ""
-	}
-	if cpVersion == nil {
-		return ""
-	}
-	return *cpVersion
+	return kcp
 }
 
 func (r *KubeadmConfigReconciler) joinControlplane(ctx context.Context, scope *Scope) (ctrl.Result, error) {
@@ -1371,6 +1374,26 @@ func (r *KubeadmConfigReconciler) computeClusterConfigurationAndAdditionalData(c
 		data.ControlPlaneComponentHealthCheckSeconds = initConfiguration.Timeouts.ControlPlaneComponentHealthCheckSeconds
 	}
 
+	return data
+}
+
+// computeAdditionalDataForWorkerJoin builds AdditionalData for serializing the
+// ClusterConfiguration that gets written to disk on worker nodes during join.
+// It uses the KCP's spec.version as the KubernetesVersion (instead of the
+// joining machine's version) and populates networking from the Cluster object.
+func (r *KubeadmConfigReconciler) computeAdditionalDataForWorkerJoin(cluster *clusterv1.Cluster, kcp *controlplanev1.KubeadmControlPlane) *upstream.AdditionalData {
+	data := &upstream.AdditionalData{}
+	data.ClusterName = ptr.To(cluster.Name)
+	data.KubernetesVersion = ptr.To(kcp.Spec.Version)
+	if cluster.Spec.ClusterNetwork.ServiceDomain != "" {
+		data.DNSDomain = ptr.To(cluster.Spec.ClusterNetwork.ServiceDomain)
+	}
+	if len(cluster.Spec.ClusterNetwork.Services.CIDRBlocks) > 0 {
+		data.ServiceSubnet = ptr.To(cluster.Spec.ClusterNetwork.Services.String())
+	}
+	if len(cluster.Spec.ClusterNetwork.Pods.CIDRBlocks) > 0 {
+		data.PodSubnet = ptr.To(cluster.Spec.ClusterNetwork.Pods.String())
+	}
 	return data
 }
 

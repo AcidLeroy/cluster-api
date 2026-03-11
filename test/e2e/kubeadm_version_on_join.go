@@ -276,27 +276,23 @@ func KubeadmVersionOnJoinSpec(ctx context.Context, inputGetter func() KubeadmVer
 	})
 }
 
-// verifyKubeadmVersionOnNode verifies the kubeadm version file and kubeadm binary
+// verifyKubeadmVersionOnNode verifies the ClusterConfiguration file and kubeadm binary
 // version on the CAPD container match the expected version.
 func verifyKubeadmVersionOnNode(ctx context.Context, containerName, expectedVersion string) {
 	containerRuntime, err := container.NewDockerClient()
 	Expect(err).ToNot(HaveOccurred(), "Failed to create container runtime client")
 
-	// The version file is written by the bootstrap controller using semver.String(),
-	// which strips the "v" prefix (e.g. "1.35.0" not "v1.35.0").
-	expectedVersionNoPfx := strings.TrimPrefix(expectedVersion, "v")
+	// Verify the ClusterConfiguration YAML was written and contains the expected kubernetesVersion.
+	log.Logf("Checking /run/cluster-api/cluster-configuration.yaml on container %s", containerName)
+	out, err := execInContainer(ctx, containerRuntime, containerName, "cat", "/run/cluster-api/cluster-configuration.yaml")
+	Expect(err).ToNot(HaveOccurred(), "Failed to read cluster-configuration.yaml: %s", out)
+	log.Logf("cluster-configuration.yaml:\n%s", out)
+	Expect(out).To(ContainSubstring("kubernetesVersion:"),
+		"ClusterConfiguration must contain kubernetesVersion field")
+	Expect(out).To(ContainSubstring(strings.TrimPrefix(expectedVersion, "v")),
+		"ClusterConfiguration kubernetesVersion does not match expected %q", expectedVersion)
 
-	// Verify the version file was written with the expected content.
-	log.Logf("Checking /run/cluster-api/kubeadm-version on container %s", containerName)
-	out, err := execInContainer(ctx, containerRuntime, containerName, "cat", "/run/cluster-api/kubeadm-version")
-	Expect(err).ToNot(HaveOccurred(), "Failed to read kubeadm version file: %s", out)
-	versionFileContent := strings.TrimSpace(out)
-	Expect(versionFileContent).To(Equal(expectedVersionNoPfx),
-		"Version file content %q does not match expected %q", versionFileContent, expectedVersionNoPfx)
-	log.Logf("Version file contains: %s", versionFileContent)
-
-	// Verify that fetch-kubeadm.sh ran and found the version file. This proves the
-	// version file was present before kubeadm join (i.e. before preKubeadmCommands ran).
+	// Verify that fetch-kubeadm.sh ran and found the ClusterConfiguration file.
 	log.Logf("Checking fetch-kubeadm.log on container %s", containerName)
 	out, err = execInContainer(ctx, containerRuntime, containerName, "cat", "/var/log/fetch-kubeadm.log")
 	Expect(err).ToNot(HaveOccurred(), "Failed to read fetch-kubeadm.log: %s", out)

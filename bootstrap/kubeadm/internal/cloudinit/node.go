@@ -21,9 +21,10 @@ import (
 )
 
 const (
-	// KubeadmVersionPath is the path where the control plane Kubernetes version is written for worker nodes.
-	// It must exist before kubeadm join runs.
-	KubeadmVersionPath = "/run/cluster-api/kubeadm-version"
+	// ClusterConfigurationPath is the path where the control plane ClusterConfiguration
+	// is written for worker nodes. Scripts running as preKubeadmCommands can read this
+	// file to extract kubernetesVersion, networking, and other cluster-wide settings.
+	ClusterConfigurationPath = "/run/cluster-api/cluster-configuration.yaml"
 )
 
 const (
@@ -55,20 +56,22 @@ runcmd:
 // NodeInput defines the context to generate a node user data.
 type NodeInput struct {
 	BaseUserData
-	JoinConfiguration string
+	JoinConfiguration        string
+	ClusterConfigurationYAML string
 }
 
 // NewNode returns the user data string to be used on a node instance.
 func NewNode(input *NodeInput) ([]byte, error) {
 	input.prepare()
 	input.Header = cloudConfigHeader
-	// Write control plane version to KubeadmVersionPath so it exists before kubeadm join.
-	versionFile := bootstrapv1.File{
-		Path:        KubeadmVersionPath,
-		Owner:       "root:root",
-		Permissions: "0644",
-		Content:     input.KubernetesVersion.String(),
+	if input.ClusterConfigurationYAML != "" {
+		ccFile := bootstrapv1.File{
+			Path:        ClusterConfigurationPath,
+			Owner:       "root:root",
+			Permissions: "0644",
+			Content:     input.ClusterConfigurationYAML,
+		}
+		input.WriteFiles = append([]bootstrapv1.File{ccFile}, input.WriteFiles...)
 	}
-	input.WriteFiles = append([]bootstrapv1.File{versionFile}, input.WriteFiles...)
 	return generate("Node", nodeCloudInit, input)
 }
