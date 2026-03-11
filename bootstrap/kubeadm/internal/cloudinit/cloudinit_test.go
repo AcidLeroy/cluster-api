@@ -324,7 +324,6 @@ func TestNewJoinNodeCommands(t *testing.T) {
 
 	g.Expect(out).To(ContainSubstring(expectedRunCmd))
 
-	// Worker node join must write /run/cluster-api/kubeadm-version/version (control plane version) before fetch-kubeadm or kubeadm join.
 	g.Expect(out).To(ContainSubstring("path: " + KubeadmVersionPath))
 }
 

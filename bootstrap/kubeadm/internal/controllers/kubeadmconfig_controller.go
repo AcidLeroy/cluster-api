@@ -836,7 +836,7 @@ func (r *KubeadmConfigReconciler) getControlPlaneVersionForJoin(ctx context.Cont
 		}
 		return ""
 	}
-	if cpVersion == nil || *cpVersion == "" {
+	if cpVersion == nil {
 		return ""
 	}
 	return *cpVersion

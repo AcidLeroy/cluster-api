@@ -273,13 +273,13 @@ spec:
   template:
     spec:
       files:
-      - path: /run/cluster-api/kubeadm-version/fetch-kubeadm.sh
+      - path: /run/cluster-api/fetch-kubeadm.sh
         owner: "root:root"
         permissions: "0755"
         content: |
           #!/bin/sh
           set -e
-          VERSION_FILE="/run/cluster-api/kubeadm-version/version"
+          VERSION_FILE="/run/cluster-api/kubeadm-version"
           KUBEADM_INSTALL="/usr/bin/kubeadm"
           BASE_URL="https://dl.k8s.io/release"
           echo "fetch-kubeadm.sh: starting"

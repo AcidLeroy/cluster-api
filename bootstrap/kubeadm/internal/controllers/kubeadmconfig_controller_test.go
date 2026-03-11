@@ -1865,7 +1865,7 @@ func TestKubeadmConfigReconciler_computeClusterConfigurationAndAdditionalData(t 
 			},
 			machine: &clusterv1.Machine{
 				Spec: clusterv1.MachineSpec{
-					Version: "v1.30.0",
+					Version: testK8sVersion,
 				},
 			},
 			initConfiguration: &bootstrapv1.InitConfiguration{
@@ -1883,7 +1883,7 @@ func TestKubeadmConfigReconciler_computeClusterConfigurationAndAdditionalData(t 
 			clusterConfiguration := &bootstrapv1.ClusterConfiguration{}
 			gotData := k.computeClusterConfigurationAndAdditionalData(tc.cluster, tc.machine, clusterConfiguration, tc.initConfiguration)
 			g.Expect(clusterConfiguration.ControlPlaneEndpoint).To(Equal("myControlPlaneEndpoint:6443"))
-			g.Expect(gotData.KubernetesVersion).To(Equal(ptr.To("v1.30.0")))
+			g.Expect(gotData.KubernetesVersion).To(Equal(ptr.To(testK8sVersion)))
 			g.Expect(gotData.ClusterName).To(Equal(ptr.To("mycluster")))
 			g.Expect(gotData.PodSubnet).To(Equal(ptr.To("myPodSubnet")))
 			g.Expect(gotData.ServiceSubnet).To(Equal(ptr.To("myServiceSubnet")))

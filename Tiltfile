@@ -176,8 +176,8 @@ FROM golang:1.25.7 as tilt-helper
 # Install delve. Note this should be kept in step with the Go release minor version.
 RUN go install github.com/go-delve/delve/cmd/dlv@v1.25
 # Support live reloading with Tilt
-RUN wget --no-check-certificate --output-document /restart.sh --quiet https://raw.githubusercontent.com/tilt-dev/rerun-process-wrapper/master/restart.sh  && \
-    wget --no-check-certificate --output-document /start.sh --quiet https://raw.githubusercontent.com/tilt-dev/rerun-process-wrapper/master/start.sh && \
+RUN wget --output-document /restart.sh --quiet https://raw.githubusercontent.com/tilt-dev/rerun-process-wrapper/master/restart.sh  && \
+    wget --output-document /start.sh --quiet https://raw.githubusercontent.com/tilt-dev/rerun-process-wrapper/master/start.sh && \
     chmod +x /start.sh && chmod +x /restart.sh && chmod +x /go/bin/dlv && \
     touch /process.txt && chmod 0777 /process.txt `# pre-create PID file to allow even non-root users to run the image`
 """

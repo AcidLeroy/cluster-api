@@ -287,8 +287,8 @@ func verifyKubeadmVersionOnNode(ctx context.Context, containerName, expectedVers
 	expectedVersionNoPfx := strings.TrimPrefix(expectedVersion, "v")
 
 	// Verify the version file was written with the expected content.
-	log.Logf("Checking /run/cluster-api/kubeadm-version/version on container %s", containerName)
-	out, err := execInContainer(ctx, containerRuntime, containerName, "cat", "/run/cluster-api/kubeadm-version/version")
+	log.Logf("Checking /run/cluster-api/kubeadm-version on container %s", containerName)
+	out, err := execInContainer(ctx, containerRuntime, containerName, "cat", "/run/cluster-api/kubeadm-version")
 	Expect(err).ToNot(HaveOccurred(), "Failed to read kubeadm version file: %s", out)
 	versionFileContent := strings.TrimSpace(out)
 	Expect(versionFileContent).To(Equal(expectedVersionNoPfx),
