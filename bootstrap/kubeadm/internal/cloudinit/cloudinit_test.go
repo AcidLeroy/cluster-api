@@ -305,7 +305,8 @@ func TestNewJoinNodeCommands(t *testing.T) {
 			Users:               nil,
 			NTP:                 nil,
 		},
-		JoinConfiguration: "my-join-config",
+		JoinConfiguration:        "my-join-config",
+		ClusterConfigurationYAML: "apiVersion: kubeadm.k8s.io/v1beta4\nkind: ClusterConfiguration\nkubernetesVersion: v1.30.0\n",
 	}
 
 	out, err := NewNode(nodeinput)
@@ -324,7 +325,7 @@ func TestNewJoinNodeCommands(t *testing.T) {
 
 	g.Expect(out).To(ContainSubstring(expectedRunCmd))
 
-	g.Expect(out).To(ContainSubstring("path: " + KubeadmVersionPath))
+	g.Expect(out).To(ContainSubstring("path: " + ClusterConfigurationPath))
 }
 
 func TestOmittableFields(t *testing.T) {

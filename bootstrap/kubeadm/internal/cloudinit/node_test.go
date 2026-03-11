@@ -33,7 +33,7 @@ func TestNewNode(t *testing.T) {
 		wantErr bool
 	}{
 		{
-			"check for duplicated write_files",
+			"check for duplicated write_files with ClusterConfiguration",
 			&NodeInput{
 				BaseUserData: BaseUserData{
 					AdditionalFiles: []bootstrapv1.File{
@@ -45,14 +45,23 @@ func TestNewNode(t *testing.T) {
 						},
 					},
 				},
+				ClusterConfigurationYAML: "apiVersion: kubeadm.k8s.io/v1beta4\nkind: ClusterConfiguration\nkubernetesVersion: v1.30.0\n",
 			},
-			checkWriteFiles(KubeadmVersionPath, "/etc/foo.conf", "/run/kubeadm/kubeadm-join-config.yaml", "/run/cluster-api/placeholder"),
+			checkWriteFiles(ClusterConfigurationPath, "/etc/foo.conf", "/run/kubeadm/kubeadm-join-config.yaml", "/run/cluster-api/placeholder"),
 			false,
 		},
 		{
-			"check for existence of kubeadm-version path, /run/kubeadm/kubeadm-join-config.yaml and /run/cluster-api/placeholder",
+			"check write_files without ClusterConfiguration",
 			&NodeInput{},
-			checkWriteFiles(KubeadmVersionPath, "/run/kubeadm/kubeadm-join-config.yaml", "/run/cluster-api/placeholder"),
+			checkWriteFiles("/run/kubeadm/kubeadm-join-config.yaml", "/run/cluster-api/placeholder"),
+			false,
+		},
+		{
+			"check write_files with ClusterConfiguration",
+			&NodeInput{
+				ClusterConfigurationYAML: "apiVersion: kubeadm.k8s.io/v1beta4\nkind: ClusterConfiguration\nkubernetesVersion: v1.30.0\n",
+			},
+			checkWriteFiles(ClusterConfigurationPath, "/run/kubeadm/kubeadm-join-config.yaml", "/run/cluster-api/placeholder"),
 			false,
 		},
 	}

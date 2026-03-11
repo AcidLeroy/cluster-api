@@ -44,6 +44,7 @@ import (
 
 	bootstrapv1beta1 "sigs.k8s.io/cluster-api/api/bootstrap/kubeadm/v1beta1"
 	bootstrapv1 "sigs.k8s.io/cluster-api/api/bootstrap/kubeadm/v1beta2"
+	controlplanev1 "sigs.k8s.io/cluster-api/api/controlplane/kubeadm/v1beta2"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	kubeadmbootstrapcontrollers "sigs.k8s.io/cluster-api/bootstrap/kubeadm/controllers"
 	"sigs.k8s.io/cluster-api/bootstrap/kubeadm/internal/setup"
@@ -94,6 +95,7 @@ func init() {
 	_ = clientgoscheme.AddToScheme(scheme)
 	_ = apiextensionsv1.AddToScheme(scheme)
 	_ = clusterv1.AddToScheme(scheme)
+	_ = controlplanev1.AddToScheme(scheme)
 	_ = bootstrapv1beta1.AddToScheme(scheme)
 	_ = bootstrapv1.AddToScheme(scheme)
 }
